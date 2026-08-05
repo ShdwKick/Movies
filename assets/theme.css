@@ -1,0 +1,29 @@
+/* «Что смотрим» — переменные вещества и локап. Полная анимация искр и
+   «луч проектора» (projector.css) добавляются отдельным шагом — здесь только
+   цвета и разметка знака, чтобы страница входа не выглядела голой. */
+:root{
+  --flame-base:#7f1d1d;
+  --flame-tip:#ff3d5a;
+  --night-1:#120a0e;
+  --night-2:#31111c;
+  --dawn-1:#fff1f2;
+  --dawn-2:#ffdbe1;
+}
+
+/* Локап: знак, бренд, сервис — см. Design/mark.md */
+.bh-lockup{
+  display:inline-flex; align-items:center; gap:.6rem;
+  text-decoration:none; color:inherit; font-size:1rem; line-height:1;
+}
+.bh-mark{ width:1.75em; height:1.75em; flex:none; }
+.bh-name{ font-weight:650; letter-spacing:-.01em; }
+.bh-sep{
+  width:1px; height:1.1em; flex:none;
+  background:color-mix(in srgb, var(--flame-tip) 40%, transparent);
+}
+.bh-service{ font-weight:400; opacity:.72; }
+
+/* Узкий экран: бренд уходит, остаются знак и сервис. */
+@media (max-width: 30rem){
+  .bh-name, .bh-sep{ display:none; }
+}

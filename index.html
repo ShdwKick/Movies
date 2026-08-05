@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Что смотрим — BurningHouse</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/theme.css">
+<style>
+  :root{color-scheme:light dark}
+  *{box-sizing:border-box}
+  body{font:16px/1.5 system-ui,sans-serif;margin:0;background:var(--dawn-1);color:#1c1b20}
+  @media(prefers-color-scheme:dark){body{background:var(--night-1);color:#f2e6e9}}
+
+  /* ===================== APP BAR ===================== */
+  .appbar{position:sticky;top:0;z-index:20;background:var(--dawn-1);
+       border-bottom:1px solid color-mix(in srgb, currentColor 10%, transparent)}
+  @media(prefers-color-scheme:dark){.appbar{background:var(--night-1)}}
+  .appbar-inner{max-width:36rem;margin:0 auto;padding:.9rem 1.5rem;
+       display:flex;align-items:center;gap:.4rem}
+  .spacer{flex:1}
+  .content{max-width:36rem;margin:0 auto;padding:1.2rem 1.5rem 4rem}
+  .icon-btn{position:relative;width:2.5rem;height:2.5rem;flex:none;padding:0;
+       border:0;border-radius:99px;background:transparent;color:inherit;cursor:pointer;
+       display:grid;place-items:center;overflow:hidden}
+  .icon-btn::after{content:"";position:absolute;inset:0;background:currentColor;opacity:0;transition:opacity .2s}
+  .icon-btn:hover::after{opacity:.08}
+  .icon-btn:active::after{opacity:.12}
+  .icon{width:1.4rem;height:1.4rem;fill:none;stroke:currentColor;stroke-width:2;
+       stroke-linecap:round;stroke-linejoin:round;flex:none}
+  h1{font-size:1.3rem;font-weight:600;margin:1.5rem 0 .3rem}
+  h2{font-size:1.05rem;font-weight:600;margin:1.6rem 0 .5rem}
+  p{margin:.4rem 0}
+  a{color:var(--flame-tip)}
+  button{font:inherit;font-weight:600;padding:.7em 1.4em;border:0;border-radius:99px;cursor:pointer;
+         background:var(--flame-tip);color:#fff}
+  button.ghost{background:transparent;color:var(--flame-tip);border:1px solid currentColor}
+  button.danger{background:transparent;color:#c81e3a;border:1px solid currentColor}
+  button:disabled{opacity:.5;cursor:default}
+  input[type=text]{font:inherit;padding:.6em .9em;border-radius:.7em;border:1px solid color-mix(in srgb, currentColor 25%, transparent);
+       background:transparent;color:inherit;width:100%}
+  .row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:1rem}
+  .muted{color:#77646a;opacity:.85;font-size:.85rem}
+  @media(prefers-color-scheme:dark){.muted{color:#c9a3ac}}
+  .hidden{display:none}
+  .bar{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-top:1rem}
+  .card{border:1px solid color-mix(in srgb, currentColor 15%, transparent);border-radius:1rem;
+        padding:1rem 1.1rem;margin-top:.8rem;background:color-mix(in srgb, currentColor 3%, transparent);
+        cursor:pointer;text-align:left;width:100%;font:inherit;color:inherit}
+  .card .title{font-weight:600}
+  .card .sub{margin-top:.2rem}
+  ul.plain{list-style:none;margin:.6rem 0;padding:0}
+  ul.plain li{display:flex;justify-content:space-between;align-items:center;gap:.6rem;
+       padding:.5em 0;border-bottom:1px solid color-mix(in srgb, currentColor 10%, transparent)}
+  ul.plain li:last-child{border-bottom:0}
+  .chip{display:inline-block;padding:.15em .6em;border-radius:99px;font-size:.75rem;font-weight:600;
+        background:color-mix(in srgb, var(--flame-tip) 18%, transparent);color:var(--flame-tip)}
+  .code-box{display:flex;align-items:center;justify-content:center;gap:.6rem;flex-wrap:wrap;
+       margin:.5rem auto 0;width:fit-content;max-width:100%;text-align:center;
+       padding:.7em 1.2em;border-radius:.9em;border:1px dashed color-mix(in srgb, var(--flame-tip) 45%, transparent)}
+  .code-box code{font-size:1.9rem;font-weight:700;letter-spacing:.06em}
+  .backlink{font-size:.9rem;text-decoration:none;display:inline-block;margin-bottom:.4rem}
+  .title-row{display:flex;justify-content:space-between;align-items:flex-start;gap:.6rem}
+  .title-row h1{margin:1.5rem 0 .3rem}
+  .menu-wrap{position:relative;flex:none;margin-top:1.1rem}
+  /* Пара кнопок-иконок у заголовка (участники + меню комнаты, «+» добавить +
+     меню CSV) — сама .menu-wrap внутри уже несёт свой margin-top для
+     выравнивания с h1/h2, второй раз тот же отступ был бы лишним. */
+  .title-actions{display:flex;align-items:center;gap:.1rem;margin-top:1.1rem}
+  .title-actions .menu-wrap{margin-top:0}
+  button.btn-sm{padding:.4em .9em;font-size:.8rem}
+  .menu{position:absolute;right:0;top:calc(100% + .3rem);min-width:11rem;z-index:10;
+       background:var(--dawn-1);border:1px solid color-mix(in srgb, currentColor 15%, transparent);
+       border-radius:.8rem;box-shadow:0 8px 24px rgba(0,0,0,.18);overflow:hidden;padding:.3rem}
+  @media(prefers-color-scheme:dark){.menu{background:var(--night-2)}}
+  .menu-item{display:block;width:100%;text-align:left;background:transparent;color:inherit;
+       font-weight:500;padding:.6em .8em;border-radius:.5rem}
+  .menu-item:hover{background:color-mix(in srgb, currentColor 8%, transparent)}
+  .menu-item.danger{color:#c81e3a}
+  .menu-item:disabled{opacity:.5;cursor:default;background:transparent}
+  .menu-user{padding:.5em .8em .6em;border-bottom:1px solid color-mix(in srgb, currentColor 12%, transparent);
+       margin-bottom:.3rem;display:flex;flex-direction:column;gap:.1rem}
+  .menu-user b{font-weight:600}
+  /* В шапке .menu-wrap сидит рядом с логотипом, а не под h1 — там верхний
+     отступ .title-row-варианта (см. выше) был бы не к месту. */
+  .appbar-inner .menu-wrap{margin-top:0}
+  .code-box code{cursor:pointer}
+  .movie-row{display:flex;gap:.7rem;align-items:center;padding:.6rem 0;
+       border-bottom:1px solid color-mix(in srgb, currentColor 10%, transparent)}
+  .movie-row:last-child{border-bottom:0}
+  .movie-poster{width:2.8rem;height:4.2rem;object-fit:cover;border-radius:.4rem;flex:none;
+       background:color-mix(in srgb, currentColor 8%, transparent)}
+  .movie-info{flex:1;min-width:0}
+  .movie-info .title{font-weight:600}
+  .movie-row button{padding:.5em 1em;flex:none}
+  .movie-detail{margin-top:.5rem;font-size:.9rem}
+  .movie-detail p{margin:.3rem 0}
+  .movie-card-head{display:flex;gap:.8rem}
+  .score-row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:.6rem}
+  /* 10 звёзд вместо старого <select> — наведение красит предпросмотр до
+     звезды-под-курсором, клик ставит оценку, повторный клик по уже
+     закрашенной звезде снимает её. */
+  .star-rating{display:inline-flex;gap:.05em}
+  .star-rating .star-btn{padding:0;border-radius:.3em;background:transparent;
+       color:color-mix(in srgb, currentColor 30%, transparent);font-size:1.35rem;line-height:1;
+       width:1.3em;height:1.3em;display:grid;place-items:center}
+  .star-rating .star-btn.filled{color:var(--flame-tip)}
+  .star-rating .star-btn:hover{background:color-mix(in srgb, currentColor 10%, transparent)}
+
+  /* ===================== МОДАЛКИ (участники, добавление фильма) ===================== */
+  .modal-backdrop{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.5);
+       display:flex;align-items:center;justify-content:center;padding:1.2rem}
+  .modal-backdrop.hidden{display:none}
+  .modal{background:var(--dawn-1);border-radius:1rem;width:100%;max-width:30rem;max-height:85vh;
+       overflow:auto;padding:1.1rem 1.3rem 1.3rem;box-shadow:0 12px 40px rgba(0,0,0,.3)}
+  @media(prefers-color-scheme:dark){.modal{background:var(--night-2)}}
+  .modal-head{display:flex;justify-content:space-between;align-items:center;gap:.8rem}
+  .modal-head h2{margin:0}
+  body.modal-open{overflow:hidden}
+  #snack{position:fixed;left:50%;bottom:1.2rem;transform:translate(-50%,120%);
+       background:#1c1b20;color:#fff;padding:.7em 1.2em;border-radius:99px;font-size:.9rem;
+       transition:transform .25s ease;pointer-events:none;max-width:90vw;text-align:center}
+  #snack.show{transform:translate(-50%,0)}
+  @media(prefers-reduced-motion:reduce){#snack{transition:none}}
+
+  /* ===================== РОЗЫГРЫШ ===================== */
+  .method-row button{background:transparent;color:var(--flame-tip);border:1px solid currentColor}
+  .method-row button.active{background:var(--flame-tip);color:#fff}
+  .draw-reel{display:flex;flex-direction:column;align-items:center;gap:.6rem;padding:1.4rem 0;text-align:center}
+  .draw-reel .movie-poster{width:8rem;height:12rem}
+  .draw-reel .title{font-weight:600}
+  .wheel-wrap{position:relative;width:17rem;max-width:90vw;aspect-ratio:1;margin:1.4rem auto}
+  .wheel-wrap svg{width:100%;height:100%;display:block;transition:transform 4.2s cubic-bezier(.12,.67,.14,1)}
+  .wheel-wrap .sector-label{font-size:.62rem;font-weight:700;fill:#fff;text-anchor:middle;dominant-baseline:middle}
+  .wheel-pointer{position:absolute;top:-.65rem;left:50%;transform:translateX(-50%);
+       width:0;height:0;border-left:.7rem solid transparent;border-right:.7rem solid transparent;
+       border-top:1.15rem solid var(--flame-tip);z-index:2;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}
+  .wheel-legend{display:flex;flex-wrap:wrap;gap:.35rem .9rem;justify-content:center;margin-top:.9rem;font-size:.82rem}
+  .wheel-legend .dot{display:inline-block;width:.7em;height:.7em;border-radius:99px;margin-right:.35em;vertical-align:middle}
+  .result-card{margin-top:1rem;text-align:center}
+  .result-card img{width:9rem;height:13.5rem;object-fit:cover;border-radius:.6rem;
+       background:color-mix(in srgb, currentColor 8%, transparent)}
+  .result-actions{justify-content:center}
+  @media(prefers-reduced-motion:reduce){.wheel-wrap svg{transition:none}}
+</style>
+</head>
+<body>
+
+<div class="appbar" id="appbar">
+  <div class="appbar-inner">
+    <a class="bh-lockup" href="#/">
+      <svg class="bh-mark" viewBox="0 0 24 24" role="img" aria-label="BurningHouse">
+        <defs>
+          <linearGradient id="bh-flame" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0" stop-color="var(--flame-base, #c2410c)"/>
+            <stop offset="1" stop-color="var(--flame-tip, #ffa62b)"/>
+          </linearGradient>
+        </defs>
+        <path fill="url(#bh-flame)" fill-rule="evenodd"
+              d="M12 1.2C13.6 5 16.4 6.6 18.2 9.4C21.4 14.4 18.6 22.4 12 22.4C5.4 22.4 2.6 14.4 5.8 9.4C7.2 7.2 9.2 6 10.2 3.4C10.9 5.6 11.4 6.6 12 7.4C12.4 5.6 12.3 3.4 12 1.2ZM12 9.8 7.4 13.6V19.2H16.6V13.6Z"/>
+      </svg>
+      <span class="bh-name">BurningHouse</span>
+      <span class="bh-sep" aria-hidden="true"></span>
+      <span class="bh-service">Что смотрим</span>
+    </a>
+    <div class="spacer"></div>
+    <div class="menu-wrap" id="accountMenuWrap" hidden>
+      <button class="icon-btn" id="accountBtn" title="Аккаунт" aria-label="Аккаунт" aria-haspopup="true" aria-expanded="false">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/></svg>
+      </button>
+      <div class="menu" id="accountMenu" hidden>
+        <div class="menu-user"><b id="accountMenuName">—</b><span class="muted" id="accountMenuMeta"></span></div>
+        <button class="menu-item" id="accountMenuManage">Управление аккаунтом →</button>
+        <button class="menu-item danger" id="accountMenuLogout">Выйти</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="content">
+
+<!-- Своей страницы входа у сервиса нет: неавторизованного сразу уводит на
+     auth.burninghouse.ru, и в норме этот экран не показывается вовсе — он
+     нужен ровно на случай «увести не получилось» (см. bh-no-service-login-page). -->
+<section id="authView" hidden>
+  <h1 id="authTitle">Нужен вход</h1>
+  <p class="muted" id="authNote">Сейчас перенесём на страницу входа BurningHouse.</p>
+  <div class="row"><button id="loginBtn">Войти</button></div>
+</section>
+
+<!-- ===================== МОИ КОМНАТЫ ===================== -->
+<section id="roomsView" hidden>
+  <h1>Мои комнаты</h1>
+  <p class="muted" id="roomsEmpty">Комнат пока нет — создайте первую.</p>
+  <div id="roomList"></div>
+  <div class="bar">
+    <input type="text" id="newRoomTitle" placeholder="Название комнаты" maxlength="200">
+    <button id="createRoomBtn">Создать</button>
+  </div>
+
+  <h2>Есть код приглашения?</h2>
+  <div class="bar">
+    <input type="text" id="joinCodeInput" placeholder="Код комнаты" maxlength="16">
+    <button class="ghost" id="joinCodeBtn">Найти</button>
+  </div>
+
+  <div class="row">
+    <a href="#/watched">Что мы смотрели →</a>
+  </div>
+</section>
+
+<!-- ===================== ОДНА КОМНАТА ===================== -->
+<section id="roomView" hidden>
+  <a class="backlink" href="#/">← Все комнаты</a>
+  <div class="title-row">
+    <h1 id="roomTitle">—</h1>
+    <div class="title-actions">
+      <button class="icon-btn" id="membersBtn" title="Участники" aria-label="Участники" aria-haspopup="dialog">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6"/><circle cx="17" cy="7" r="2.4"/><path d="M14.8 20c.2-2.6 2-4.6 4.6-4.9"/></svg>
+      </button>
+      <div class="menu-wrap">
+        <button class="icon-btn" id="roomMenuBtn" title="Действия с комнатой" aria-label="Действия с комнатой" aria-haspopup="true" aria-expanded="false">
+          <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
+        </button>
+        <div class="menu" id="roomMenu" hidden>
+          <button class="menu-item" id="renameRoomBtn">Переименовать</button>
+          <button class="menu-item" id="leaveRoomBtn">Выйти</button>
+          <button class="menu-item danger hidden" id="deleteRoomBtn">Удалить комнату</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Приглашение</h2>
+  <div id="codeArea"></div>
+
+  <div class="title-row">
+    <h2>Фильмы</h2>
+    <div class="title-actions">
+      <button class="icon-btn" id="addMovieBtn" title="Добавить фильм" aria-label="Добавить фильм" aria-haspopup="dialog">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <div class="menu-wrap">
+        <button class="icon-btn" id="csvMenuBtn" title="Экспорт и импорт CSV" aria-label="Экспорт и импорт CSV" aria-haspopup="true" aria-expanded="false">
+          <svg class="icon" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>
+        </button>
+        <div class="menu" id="csvMenu" hidden>
+          <button class="menu-item" id="exportCsvBtn">Экспорт CSV</button>
+          <button class="menu-item" id="importCsvBtn">Импорт CSV</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <input type="file" id="importCsvInput" class="hidden" accept=".csv,text/csv">
+
+  <h2>Очередь</h2>
+  <div class="row" id="drawLinkRow" hidden>
+    <button id="drawLinkBtn">Крутить</button>
+  </div>
+  <p class="muted" id="moviesEmpty">Фильмов пока нет — добавьте через + выше.</p>
+  <div id="movieList"></div>
+
+  <h2>История просмотров</h2>
+  <p class="muted" id="movieHistoryEmpty">В этой комнате ещё ничего не смотрели.</p>
+  <div id="movieHistoryList"></div>
+</section>
+
+<!-- ===================== МОДАЛКА: УЧАСТНИКИ ===================== -->
+<div class="modal-backdrop hidden" id="membersModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="membersModalTitle">
+    <div class="modal-head">
+      <h2 id="membersModalTitle">Участники</h2>
+      <button class="icon-btn" id="membersModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <ul class="plain" id="memberList"></ul>
+  </div>
+</div>
+
+<!-- ===================== МОДАЛКА: ДОБАВИТЬ ФИЛЬМ ===================== -->
+<div class="modal-backdrop hidden" id="addMovieModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="addMovieModalTitle">
+    <div class="modal-head">
+      <h2 id="addMovieModalTitle">Добавить фильм</h2>
+      <button class="icon-btn" id="addMovieModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="row">
+      <input type="text" id="movieSearchInput" placeholder="Название фильма" maxlength="200">
+      <button id="movieSearchBtn">Искать</button>
+    </div>
+    <div id="movieSearchResults"></div>
+    <div class="row">
+      <button class="ghost" id="addMovieDoneBtn">Готово</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== РОЗЫГРЫШ ===================== -->
+<section id="drawView" hidden>
+  <a class="backlink" id="drawBack" href="#/">← Комната</a>
+  <h1 id="drawTitle">Розыгрыш</h1>
+
+  <div id="drawSetup">
+    <p class="muted">Как выбираем?</p>
+    <div class="row method-row" id="drawMethodRow">
+      <button id="methodWeightedBtn" type="button">Случайный выбор</button>
+      <button id="methodWheelBtn" type="button">Колесо</button>
+    </div>
+    <div class="row">
+      <button id="drawStartBtn" type="button">Крутить</button>
+    </div>
+  </div>
+
+  <div id="drawStage" class="hidden"></div>
+  <div id="drawResult" class="hidden"></div>
+</section>
+
+<!-- ===================== ЧТО МЫ СМОТРЕЛИ ===================== -->
+<section id="watchedView" hidden>
+  <a class="backlink" href="#/">← Все комнаты</a>
+  <h1>Что мы смотрели</h1>
+  <p class="muted" id="watchedEmpty">Пока ничего не отмечено просмотренным.</p>
+  <div id="watchedList"></div>
+</section>
+
+<!-- ===================== ПРИГЛАШЕНИЕ ===================== -->
+<section id="joinView" hidden>
+  <a class="backlink" href="#/">← Все комнаты</a>
+  <h1 id="joinTitle">Приглашение</h1>
+  <p class="muted" id="joinMembers"></p>
+  <div class="row">
+    <button id="joinBtn">Присоединиться</button>
+    <span class="muted hidden" id="joinAlready">Вы уже в этой комнате.</span>
+  </div>
+</section>
+
+</div>
+
+<div id="snack" role="status" aria-live="polite"></div>
+
+<script src="assets/auth-client.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
