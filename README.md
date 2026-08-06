@@ -86,7 +86,9 @@ POISKKINO_API_KEY=ваш_ключ node dev.mjs
 
 Схема общая для всех проектов BurningHouse: GitHub Actions собирает образ и
 пушит в Docker Hub, на сервер не заходит; новый образ забирает Watchtower.
-Подробности и установка Watchtower — в `../Auth/README-deploy.md`.
+Подробный пошаговый гайд (Docker и bare-metal, DNS, nginx, сертификат,
+регистрация в auth, бэкапы) — в [`README-deploy.md`](README-deploy.md).
+Установка самого Watchtower — в `../Auth/README-deploy.md`.
 
 Секреты репозитория: только `DOCKERHUB_USERNAME` и `DOCKERHUB_TOKEN`.
 SSH-ключа в CI быть не должно.

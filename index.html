@@ -6,10 +6,22 @@
 <meta name="color-scheme" content="light dark">
 <title>Что смотрим? — BurningHouse</title>
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/brand.css">
 <link rel="stylesheet" href="assets/theme.css">
 <link rel="stylesheet" href="assets/styles.css">
 </head>
 <body>
+
+<!-- Горящий дом под всем приложением — тот же приём, что в Trip/Финансах.
+     Пылинки в луче проектора (bh-sparks--motes) сверху вниз, вбок — повадка
+     «Что смотрим?» из Design/motion.md. Приглушённый вариант: панели
+     непрозрачны, фон подсвечивает поля вокруг них, а не спорит с контентом. -->
+<div class="bh-backdrop bh-backdrop--page bh-backdrop--quiet" aria-hidden="true">
+  <div class="bh-layer"><div class="bh-glow"></div></div>
+  <div class="bh-layer"><div class="bh-haze"></div></div>
+  <div class="bh-layer bh-sparks bh-sparks--motes" data-bh-sparks="7"></div>
+  <div class="bh-layer bh-projector"></div>
+</div>
 
 <div class="appbar" id="appbar">
   <div class="appbar-inner">
@@ -108,7 +120,7 @@
     <h1 id="roomTitle">—</h1>
     <div class="title-actions">
       <button class="icon-btn" id="membersBtn" title="Участники" aria-label="Участники" aria-haspopup="dialog">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-3-3.87"/><path d="M13 3.13a4 4 0 0 1 0 7.75"/><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/></svg>
+        <svg class="icon" viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-3-3.87"/><path d="M15 3.13a4 4 0 0 1 0 7.75"/><circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/></svg>
       </button>
       <div class="menu-wrap">
         <button class="icon-btn" id="roomMenuBtn" title="Действия с комнатой" aria-label="Действия с комнатой" aria-haspopup="true" aria-expanded="false">
@@ -123,19 +135,7 @@
     </div>
   </div>
 
-  <div class="title-row">
-    <h2>Приглашение</h2>
-    <div class="title-actions">
-      <div class="menu-wrap" id="codeMenuWrap" hidden>
-        <button class="icon-btn" id="codeMenuBtn" title="Действия с приглашением" aria-label="Действия с приглашением" aria-haspopup="true" aria-expanded="false">
-          <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
-        </button>
-        <div class="menu" id="codeMenu" hidden>
-          <button class="menu-item danger" id="revokeCodeBtn">Отключить приглашение</button>
-        </div>
-      </div>
-    </div>
-  </div>
+  <h2>Приглашение</h2>
   <div id="codeArea"></div>
 
   <div class="title-row">
@@ -162,7 +162,7 @@
     <button class="btn filled" id="drawLinkBtn">Крутить</button>
   </div>
   <p class="muted" id="moviesEmpty">Фильмов пока нет — добавьте через + выше.</p>
-  <div id="movieList"></div>
+  <div class="queue-grid" id="movieList"></div>
 
   <h2>История просмотров</h2>
   <p class="muted" id="movieHistoryEmpty">В этой комнате ещё ничего не смотрели.</p>
@@ -184,21 +184,20 @@
 
 <!-- ===================== МОДАЛКА: ДОБАВИТЬ ФИЛЬМ ===================== -->
 <div class="modal-backdrop hidden" id="addMovieModalBackdrop">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="addMovieModalTitle">
+  <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="addMovieModalTitle">
     <div class="modal-head">
       <h2 id="addMovieModalTitle">Добавить фильм</h2>
       <button class="icon-btn" id="addMovieModalClose" aria-label="Закрыть">
         <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
-    <div class="row">
+    <div class="search-row">
       <input type="text" id="movieSearchInput" placeholder="Название фильма" maxlength="200">
-      <button class="btn tonal" id="movieSearchBtn">Искать</button>
+      <button class="icon-btn tonal" id="movieSearchBtn" title="Искать" aria-label="Искать">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      </button>
     </div>
     <div id="movieSearchResults"></div>
-    <div class="row">
-      <button class="btn tonal" id="addMovieDoneBtn">Готово</button>
-    </div>
   </div>
 </div>
 
@@ -305,6 +304,7 @@
 <div id="snack" role="status" aria-live="polite"></div>
 
 <script src="assets/auth-client.js"></script>
+<script src="assets/brand.js"></script>
 <script src="assets/app.js"></script>
 </body>
 </html>

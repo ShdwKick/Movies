@@ -1,0 +1,229 @@
+/* Копия Shared/brand.css — не редактировать здесь.
+   Правки вносят в Shared/ и раскладывают: node Shared/sync.mjs */
+/* ═══════════════════════════════════════════════════════════════════════
+   Фирменный слой BurningHouse: знак, локап, горящий фон.
+   Канонический файл — этот. Сервисы копируют его к себе в assets/ и
+   переопределяют только четыре-шесть переменных (см. блок ниже).
+
+   Решения и причины — в BurningHouse/Design/. Коротко о главном:
+   • анимируем только transform/opacity — эти слои уходят на видеокарту;
+   • размытие даём радиальным градиентом, а не filter: blur() — блюр во
+     весь экран самая дорогая вещь, какую можно повесить на фон;
+   • prefers-reduced-motion не «желательно»: движущийся фон при
+     вестибулярных нарушениях вызывает тошноту.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Токены сервиса. По умолчанию — дерево/янтарь (вход). ──
+   Свой сервис задаёт эти же переменные у себя ПОСЛЕ подключения brand.css.
+   Цвет не выбирается на глаз: он берётся от вещества, которое так горит,
+   — таблица свободных в Design/services.md. */
+:root{
+  --flame-base:#c2410c;   /* основание — уголь, общее для семьи */
+  --flame-tip:#ffa62b;    /* вершина — она и различает сервисы */
+  --night-1:#0e0b16;      /* края тёмной сцены */
+  --night-2:#1f1330;      /* у горизонта, где горит дом */
+  --dawn-1:#fff6ec;       /* светлая тема — рассвет, а не осветлённая ночь */
+  --dawn-2:#ffe4cb;
+}
+
+/* ═══ ФОН ═══
+   position:fixed, поэтому одинаково работает и как фон страницы (вход),
+   и внутри полноэкранной модалки (окно входа в «Финансах»): когда
+   родитель скрыт, скрыт и фон. */
+.bh-backdrop{
+  position:fixed; inset:0; z-index:0;
+  overflow:hidden; pointer-events:none;
+  --sky-1:var(--dawn-1); --sky-2:var(--dawn-2);
+  background:radial-gradient(125% 100% at 50% 112%, var(--sky-2) 0%, var(--sky-1) 62%);
+}
+/* Тему берём из тех же сигналов, что и хост: у «Финансов» data-theme стоит
+   всегда, у входа его может не быть — тогда решает системная настройка. */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .bh-backdrop{ --sky-1:var(--night-1); --sky-2:var(--night-2); }
+}
+:root[data-theme="dark"]  .bh-backdrop{ --sky-1:var(--night-1); --sky-2:var(--night-2); }
+:root[data-theme="light"] .bh-backdrop{ --sky-1:var(--dawn-1);  --sky-2:var(--dawn-2); }
+
+/* Фон под ВСЮ страницу приложения, а не только под окно входа.
+   z-index:-1 здесь обязателен: с нулевым позиционированный слой красится
+   поверх непозиционированных блоков и накрыл бы собой весь интерфейс.
+   Хост при этом обязан отдать фон наружу — иначе слой окажется под
+   непрозрачной заливкой body и его просто не будет видно:
+
+     html{ background:var(--ваш-фон) }
+     body{ background:transparent }                                        */
+.bh-backdrop--page{ z-index:-1; }
+
+/* Приглушённый вариант — для страниц с плотным интерфейсом, где фон должен
+   только подсвечивать поля вокруг панелей, а не спорить с содержимым.
+   Приглушать приходится ОТДЕЛЬНЫМ набором кадров, а не статичной opacity:
+   свойство, которое анимируется, значением из правила не перебить — анимация
+   всегда важнее. На этом легко обжечься и потом искать, почему «не применилось». */
+.bh-backdrop--quiet .bh-glow{ animation-name:bh-breathe-quiet }
+@keyframes bh-breathe-quiet{
+  from{ transform:translateX(-50%) scale(1);    opacity:.24 }
+  to  { transform:translateX(-50%) scale(1.07); opacity:.32 }
+}
+.bh-backdrop--quiet .bh-haze{ opacity:.55 }
+
+.bh-layer{ position:absolute; inset:0; }
+
+/* Свечение очага снизу по центру — оттуда, где горит дом. */
+.bh-glow{
+  position:absolute; left:50%; bottom:-34%;
+  width:min(92%, 46rem); aspect-ratio:1; transform:translateX(-50%);
+  border-radius:50%; opacity:.55;
+  background:radial-gradient(circle,
+    color-mix(in srgb, var(--flame-tip) 46%, transparent) 0%,
+    color-mix(in srgb, var(--flame-base) 28%, transparent) 38%,
+    transparent 70%);
+  will-change:transform, opacity;
+  animation:bh-breathe 11s ease-in-out infinite alternate;
+}
+@keyframes bh-breathe{
+  from{ transform:translateX(-50%) scale(1);    opacity:.5 }
+  to  { transform:translateX(-50%) scale(1.09); opacity:.62 }
+}
+
+/* Медленный проход света по комнате — вариант «Угли» из Design/motion.md.
+   Выбран для страниц входа: при активной SSO-сессии страница показывается
+   на долю секунды, и эффектный разгон читался бы как тормоз. */
+.bh-sweep{
+  position:absolute; inset:-30% -60%;
+  background:linear-gradient(74deg, transparent 42%,
+    color-mix(in srgb, var(--flame-tip) 10%, transparent) 50%, transparent 58%);
+  will-change:transform;
+  animation:bh-sweep 16s ease-in-out infinite;
+}
+@keyframes bh-sweep{
+  0%,100%{ transform:translateX(-22%) }
+  50%    { transform:translateX(22%) }
+}
+
+/* Дымка над очагом — прячет нижнюю границу свечения. */
+.bh-haze{
+  position:absolute; left:-20%; right:-20%; bottom:0; height:58%;
+  background:linear-gradient(to top,
+    color-mix(in srgb, var(--flame-base) 18%, transparent), transparent 78%);
+}
+
+/* ═══ ИСКРЫ ═══
+   Узлы расставляет brand.js: у каждой свои длительность, задержка и снос.
+   Одинаковые искры сразу читаются как размноженная копипаста. */
+.bh-spark{
+  position:absolute; bottom:-2%;
+  width:3px; height:3px; border-radius:50%;
+  background:var(--flame-tip);
+  box-shadow:0 0 6px 1px color-mix(in srgb, var(--flame-tip) 65%, transparent);
+  opacity:0; will-change:transform, opacity;
+  animation:bh-rise var(--bh-dur, 12s) linear var(--bh-delay, 0s) infinite;
+}
+@keyframes bh-rise{
+  0%  { transform:translate3d(0,0,0) scale(.6); opacity:0 }
+  12% { opacity:.8 }
+  70% { opacity:.45 }
+  100%{ transform:translate3d(var(--bh-drift, 2rem), -60vh, 0) scale(.25); opacity:0 }
+}
+
+/* Повадка искр — единственное, чем сервису позволено выделиться помимо цвета.
+   Подключается классом на контейнере искр. */
+.bh-sparks--settle .bh-spark{ animation-name:bh-settle }   /* финансы: копятся */
+@keyframes bh-settle{
+  0%  { transform:translate3d(0,0,0) scale(.5); opacity:0 }
+  15% { opacity:.9 }
+  60% { transform:translate3d(var(--bh-drift,1rem), -34vh, 0) scale(1); opacity:.85 }
+  100%{ transform:translate3d(var(--bh-drift,1rem), -26vh, 0) scale(.7); opacity:0 }
+}
+.bh-sparks--motes .bh-spark{ animation-name:bh-motes; animation-timing-function:ease-in-out }
+@keyframes bh-motes{                                        /* фильмы: пыль в луче */
+  0%  { transform:translate3d(0,-70vh,0) scale(.5); opacity:0 }
+  20% { opacity:.7 }
+  100%{ transform:translate3d(var(--bh-drift,4rem), -8vh, 0) scale(.4); opacity:0 }
+}
+.bh-sparks--wind .bh-spark{ animation-name:bh-wind }        /* поездки: сносит ветром */
+@keyframes bh-wind{
+  0%  { transform:translate3d(0,0,0) scale(.6); opacity:0 }
+  14% { opacity:.85 }
+  100%{ transform:translate3d(calc(var(--bh-drift,1rem) * 6), -30vh, 0) scale(.3); opacity:0 }
+}
+
+/* ═══ ЗНАК ═══
+   Градиент объявляется ВНУТРИ каждого <svg>: вынесенный наружу не увидит
+   переменные сервиса и знак уедет в чёрный. Подробности — Design/mark.md. */
+.bh-mark{ display:block; flex:none; }
+.bh-mark .bh-flame{
+  transform-origin:50% 100%;
+  animation:bh-flick 4.2s ease-in-out infinite;
+}
+@keyframes bh-flick{
+  0%,100%{ transform:scaleY(1)    scaleX(1);    opacity:1 }
+  32%    { transform:scaleY(.94)  scaleX(1.03); opacity:.93 }
+  58%    { transform:scaleY(1.04) scaleX(.98);  opacity:1 }
+}
+
+/* ═══ ЛОКАП: знак, бренд, сервис ═══
+   Бренд — постоянная величина, сервис — переменная; вес это и показывает. */
+.bh-lockup{
+  display:inline-flex; align-items:center; gap:.6rem;
+  text-decoration:none; color:inherit; font-size:1rem; line-height:1;
+}
+.bh-lockup .bh-mark{ width:1.75em; height:1.75em; }
+.bh-name{ font-weight:650; letter-spacing:-.01em; }
+/* Единственное место, где цвет сервиса попадает в текстовую строку. */
+.bh-sep{
+  width:1px; height:1.15em; flex:none; border-radius:1px;
+  background:color-mix(in srgb, var(--flame-tip) 45%, transparent);
+}
+.bh-service{ font-weight:400; opacity:.72; }
+
+/* Узкий экран: бренд уходит, остаются знак и название сервиса — на своей
+   странице человек и так знает, где он, а место дороже. */
+@media (max-width:30rem){
+  .bh-name, .bh-sep{ display:none }
+}
+
+/* ═══ ПЕРЕДАЧА НА СТРАНИЦУ ВХОДА ═══
+   Уход на auth-домен — это обычная навигация между разными сайтами, и резкая
+   подмена читается рывком. Кросс-доменные view transitions браузер не даёт
+   (разные origin), поэтому склеиваем вручную: здесь карточка уходит, там
+   появляется. Фон остаётся на месте и в обеих точках выглядит одинаково —
+   именно он и создаёт ощущение, что это одна страница, а не две.
+
+   Класс вешает сервис перед auth.login(); длительность обязана совпадать с
+   задержкой навигации в его коде.
+
+   Класс продублирован в селекторе намеренно: у карточки сервиса обычно уже
+   есть своя анимация появления, и её правило идёт в файле позже. При равной
+   специфичности побеждает последнее — уход бы молча не сработал. Удвоение
+   класса поднимает специфичность, не прибегая к !important. */
+.bh-leaving.bh-leaving{
+  animation:bh-leave .22s cubic-bezier(.4,0,1,1) both;
+  pointer-events:none;
+}
+@keyframes bh-leave{
+  to{ opacity:0; transform:translateY(-6px) scale(.985) }
+}
+
+/* Прибытие: карточка входа собирается из того же движения, в котором ушла
+   предыдущая. Вешается на саму карточку на auth-домене. */
+.bh-arriving{
+  animation:bh-arrive .34s cubic-bezier(.16,.84,.44,1) both;
+}
+@keyframes bh-arrive{
+  from{ opacity:0; transform:translateY(10px) scale(.985) }
+}
+
+/* ═══ ДОСТУПНОСТЬ ═══
+   Замирает в осмысленном виде, а не в пустоте: искры остаются видимыми,
+   свечение — в среднем положении. */
+@media (prefers-reduced-motion: reduce){
+  .bh-glow, .bh-sweep, .bh-spark, .bh-mark .bh-flame,
+  .bh-leaving, .bh-arriving{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+  }
+  .bh-spark{ opacity:.45 }
+  /* Уходящая карточка не должна остаться невидимой, если анимацию отключили
+     до того, как случилась навигация. */
+  .bh-leaving{ opacity:1 }
+}

@@ -1,0 +1,32 @@
+[Unit]
+Description=Chto Smotrim (movie-night picker sync server)
+After=network.target
+
+[Service]
+Type=simple
+# Каталог, куда вы скопировали server.js, auth-client.js, poiskkino.js, selection.js, csv.js, index.html, assets/:
+WorkingDirectory=/opt/movies
+ExecStart=/usr/bin/node /opt/movies/server.js
+Restart=always
+RestartSec=3
+# Слушаем только localhost — наружу выставляет nginx:
+Environment=HOST=127.0.0.1
+Environment=PORT=8792
+Environment=DATA_DIR=/opt/movies/data
+Environment=AUTH_ISSUER=https://auth.burninghouse.ru
+Environment=AUTH_CLIENT_ID=movies
+# Ключ poiskkino.dev — без него поиск и добавление новых фильмов отвечают 503.
+# Значение сюда не пишите напрямую (юнит читают все локальные root) — задайте
+# через EnvironmentFile ниже или замените на реальный ключ и уберите строку
+# EnvironmentFile, если файл не заводите.
+EnvironmentFile=-/opt/movies/movies.env
+# Работаем от отдельного непривилегированного пользователя:
+User=movies
+Group=movies
+# Немного изоляции:
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

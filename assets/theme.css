@@ -1,6 +1,6 @@
-/* «Что смотрим» — переменные вещества и локап. Полная анимация искр и
-   «луч проектора» (projector.css) добавляются отдельным шагом — здесь только
-   цвета и разметка знака, чтобы страница входа не выглядела голой. */
+/* «Что смотрим» — переменные вещества, локап и луч прожектора. Искры
+   (пылинки в луче, bh-sparks--motes) — из общего Shared/brand.css, здесь
+   только специфика самого сервиса. */
 :root{
   --flame-base:#7f1d1d;
   --flame-tip:#ff3d5a;
@@ -26,4 +26,34 @@
 /* Узкий экран: бренд уходит, остаются знак и сервис. */
 @media (max-width: 30rem){
   .bh-name, .bh-sep{ display:none; }
+}
+
+/* ═══ ЛУЧ ПРОЖЕКТОРА ═══
+   Специфика только «Что смотрим?» — в Shared/brand.css такого класса нет.
+   Конус света: узкая вершина у верхнего края (объектив), расширяется книзу —
+   туда же, куда по bh-sparks--motes (brand.css) летят пылинки, «сверху вниз,
+   вбок» (Design/motion.md). Заливка в тон --flame-tip, но очень тихая (.06–
+   .12): это подсветка сцены, а не яркий луч поверх интерфейса.
+
+   Мерцание — steps(12), не ease/linear: ступенчатая функция даёт ощущение
+   кадров плёнки, плавная выглядит просто как дыхание (Design/motion.md).
+   Анимируем только opacity — тот же приём, что у .bh-glow в brand.css: базовое
+   значение opacity объявлено на самом классе (не только в @keyframes), чтобы
+   после prefers-reduced-motion (см. общий свитч ниже в файле — глушит
+   animation-duration до .01ms) луч замирал на осмысленной средней яркости,
+   а не гас и не улетал в максимум. */
+.bh-projector{
+  clip-path:polygon(47% 0%, 53% 0%, 94% 100%, 6% 100%);
+  background:linear-gradient(to bottom,
+    color-mix(in srgb, var(--flame-tip) 55%, transparent) 0%,
+    color-mix(in srgb, var(--flame-tip) 18%, transparent) 55%,
+    transparent 100%);
+  mix-blend-mode:screen;
+  opacity:.09;
+  will-change:opacity;
+  animation:bh-projector-flicker 1.5s steps(12) infinite alternate;
+}
+@keyframes bh-projector-flicker{
+  from{ opacity:.06 }
+  to  { opacity:.12 }
 }

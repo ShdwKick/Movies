@@ -93,7 +93,13 @@
 :root{color-scheme:light dark}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
-html{background:var(--md-sys-color-surface);transition:background-color .3s var(--ease-std)}
+/* Фон отдаём наружу под .bh-backdrop--page (assets/brand.css): сам он
+   position:fixed с z-index:-1 и красится поверх html, но ПОД любым
+   непрозрачным блоком страницы — если html/body остаются непрозрачными
+   («сплошными»), фон окажется не виден вовсе (см. комментарий в шапке
+   brand.css). --dawn-1/--night-1 объявлены в theme.css. */
+html{background:var(--dawn-1);transition:background-color .3s var(--ease-std)}
+html[data-theme="dark"]{background:var(--night-1)}
 body{
   font:16px/1.5 var(--md-font);
   color:var(--md-sys-color-on-surface);
@@ -102,11 +108,6 @@ body{
   -webkit-font-smoothing:antialiased;
 }
 body.modal-open{overflow:hidden}
-/* Единственное место, где фон целой страницы красится пламенем: экран
-   «нужен вход» — брендовый момент, как и страница входа в auth
-   (см. BurningHouse/Design/palette.md, «фон входа» — допустимый акцент). */
-body.auth-bg{background:var(--dawn-1)}
-[data-theme="dark"] body.auth-bg{background:var(--night-1)}
 h1{font-size:1.3rem;font-weight:600;margin:1.5rem 0 .3rem}
 h2{font-size:1.05rem;font-weight:600;margin:1.6rem 0 .5rem}
 p{margin:.4rem 0}
@@ -257,6 +258,45 @@ select{
 .movie-info .title{font-weight:650;font-size:15px}
 .chip-row{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.4rem}
 
+/* Карточка результата поиска в модалке «Добавить фильм» — кликабельна
+   целиком (клик добавляет фильм в комнату, см. renderMovieResultCard в
+   app.js). Это div с role="button", а не настоящий <button>: внутри есть
+   своя icon-btn «Подробнее», а вложенный <button> в <button> невалиден.
+   Кнопка-стрелка встаёт в movie-card-head как обычный третий flex-элемент
+   (align-items:stretch без явной cross-size у icon-btn == flex-start, т.е.
+   верхний край) — без абсолютного позиционирования. Очередь/история/
+   глобальный поиск используют голый .movie-card без этого модификатора и
+   остаются некликабельными. */
+.movie-card-pick{cursor:pointer}
+.movie-card-pick:hover{border-color:color-mix(in srgb,var(--md-sys-color-primary) 40%,var(--md-sys-color-outline-variant))}
+.movie-card-pick:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
+.movie-card-pick .movie-card-head{align-items:flex-start}
+
+/* Очередь комнаты — сетка, а не вертикальная лента: карточка стала у́же
+   (постер+чипы+кнопки в углах, а не на всю ширину колонки), плитки уже,
+   чем .movie-grid (там только постер+название), но всё равно 2-3 в ряд на
+   экране ~1080px (см. план задачи «сетка очереди»). */
+.queue-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(20rem,1fr));margin-top:10px}
+/* Разворот «Подробнее» у карточки очереди — карточка тянется на всю ширину
+   ряда чистым CSS Grid (класс ставит/снимает bindMovieDetailToggle в
+   app.js), соседние карточки сами переставляются грид-раскладкой без
+   ручного JS-пересчёта позиций. */
+.queue-grid .movie-card.expanded{grid-column:1/-1}
+
+/* Углы карточки очереди — стрелка «Подробнее» и «…»-меню действий уехали в
+   правый верхний угол через тот же .title-row/.title-actions, что и
+   заголовок комнаты/«Фильмы» (а не absolute-позиционирование с нуля):
+   .movie-card-head должен тянуться и уступать место actions, а margin-top
+   у .title-actions/.menu-wrap, рассчитанный на отступ под <h1>, тут не нужен. */
+.movie-card .title-row{gap:.4rem}
+.movie-card .title-row .movie-card-head{flex:1;min-width:0}
+.movie-card .title-actions{margin-top:0}
+
+/* Кнопка «Смотреть» (kinopoiskCxUrl) — правый нижний угол карточки очереди,
+   на месте бывших «Отметить просмотренным»/«Убрать из комнаты» (те переехали
+   в меню-«…» выше). */
+.movie-card-footer{display:flex;justify-content:flex-end;margin-top:.8rem}
+
 .movie-detail{margin-top:.6rem;font-size:.9rem}
 .movie-detail p{margin:.3rem 0}
 .movie-detail .movie-desc{color:var(--md-sys-color-on-surface-variant)}
@@ -354,6 +394,16 @@ select{
 }
 .modal-head{display:flex;justify-content:space-between;align-items:center;gap:.8rem}
 .modal-head h2{margin:0}
+/* Шире, чем стандартная .modal — только для #addMovieModalBackdrop (карточки
+   результатов внутри неё кликабельны целиком и просторнее, чем строка с
+   кнопкой «Добавить», см. app.js renderMovieResultCard). Остальные модалки
+   (участники/CSV/глобальный поиск/пикер комнаты) не трогаем. */
+.modal.modal-wide{max-width:38rem}
+
+/* Строка поиска в модалке «Добавить фильм» — инпут + компактная icon-btn
+   (лупа) в одну строку, вместо инпута с текстовой кнопкой «Искать» под ним. */
+.search-row{display:flex;gap:.6rem;align-items:center;margin-top:1rem}
+.search-row input{flex:1}
 
 ul.plain{list-style:none;margin:.6rem 0;padding:0}
 ul.plain li{display:flex;justify-content:space-between;align-items:center;gap:.6rem;

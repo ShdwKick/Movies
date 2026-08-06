@@ -389,25 +389,55 @@ function renderMovieResultRow(mv) {
   return row;
 }
 
+/** Карточка результата поиска в модалке «Добавить фильм» (комната уже
+    известна из state.room) — кликабельна целиком, клик добавляет фильм в
+    комнату и закрывает модалку (см. план: убрали кнопку «Добавить» и кнопку
+    «Готово» разом — сценарий добавления нескольких фильмов подряд ушёл).
+    Настоящий <button> для всей карточки не подходит: внутри есть icon-btn
+    «Подробнее» (bindMovieDetailToggle), а <button> внутри <button> невалиден
+    — поэтому div с role="button"/tabindex + свой keydown на Enter/Space.
+    renderMovieResultRow — общая шапка (постер+инфо), её не трогаем: тот же
+    компонент используют результаты ГЛОБАЛЬНОГО поиска (renderSearchResultRow),
+    у которых кликабельности и стрелки-подробностей нет и не будет — там
+    выбор комнаты через <select> остаётся как есть. */
+function renderMovieResultCard(mv) {
+  const card = el("div", "movie-card movie-card-pick");
+  card.setAttribute("role", "button");
+  card.tabIndex = 0;
+
+  const head = renderMovieResultRow(mv);
+  const moreBtn = el("button", "icon-btn xs");
+  moreBtn.type = "button";
+  moreBtn.dataset.act = "more";
+  moreBtn.title = "Подробнее";
+  moreBtn.setAttribute("aria-label", "Подробнее");
+  moreBtn.setAttribute("aria-expanded", "false");
+  moreBtn.innerHTML = CHEVRON_DOWN_ICON;
+  head.append(moreBtn);
+  card.append(head, el("div", "movie-detail hidden"));
+
+  bindMovieDetailToggle(card, mv);
+
+  const addMovie = () => act(async () => {
+    const roomId = state.room.room.id;
+    const r = await api(`/rooms/${roomId}/movies`, { method: "POST", body: { kinopoiskId: mv.kinopoiskId } });
+    closeModal("addMovieModalBackdrop");
+    await openRoom(roomId);
+    return r;
+  }, "Фильм добавлен");
+  card.onclick = addMovie;
+  card.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); addMovie(); }
+  });
+
+  return card;
+}
+
 function renderMovieResults(movies) {
   const box = $("movieSearchResults");
   box.textContent = "";
   if (!movies.length) { box.append(el("p", "muted", "Ничего не нашлось.")); return; }
-  for (const mv of movies) {
-    const card = el("div", "movie-card");
-    card.append(renderMovieResultRow(mv));
-    const actions = el("div", "row");
-    const addBtn = el("button", "btn tonal sm", "Добавить");
-    addBtn.onclick = () => act(async () => {
-      const roomId = state.room.room.id;
-      const r = await api(`/rooms/${roomId}/movies`, { method: "POST", body: { kinopoiskId: mv.kinopoiskId } });
-      await openRoom(roomId);
-      return r;
-    }, "Фильм добавлен");
-    actions.append(addBtn);
-    card.append(actions);
-    box.append(card);
-  }
+  for (const mv of movies) box.append(renderMovieResultCard(mv));
 }
 
 /** Переиспользуемый блок «добавить в комнату»: <select> со списком комнат
@@ -475,7 +505,8 @@ function renderMovies() {
 
   $("moviesEmpty").hidden = queued.length > 0;
   const list = $("movieList");
-  list.textContent = "";
+  list.textContent = ""; // старые карточки со своими меню-«…» уходят целиком
+  openCardMenu = null;   // не держать ссылку на меню отрисованной-и-удалённой карточки
   for (const rm of queued) list.append(renderMovieCard(rm, room));
 
   $("movieHistoryEmpty").hidden = history.length > 0;
@@ -530,12 +561,24 @@ function renderStarRating(container, kinopoiskId, currentScore, onRated) {
     styles.css; общий свитч prefers-reduced-motion там же гасит анимацию. */
 function bindMovieDetailToggle(card, mv) {
   const btn = card.querySelector('[data-act="more"]');
-  btn.onclick = () => {
+  btn.onclick = e => {
+    // Карточка результата поиска в модалке «Добавить фильм» кликабельна
+    // целиком (см. renderMovieResultCard) — клик по стрелке не должен
+    // всплывать до card.onclick и триггерить добавление фильма. Для
+    // карточек очереди/истории (без клика на всей карточке) stopPropagation
+    // безвреден.
+    e.stopPropagation();
     const box = card.querySelector(".movie-detail");
     const willShow = box.classList.contains("hidden");
     box.classList.toggle("hidden");
     btn.classList.toggle("expanded", willShow);
     btn.setAttribute("aria-expanded", String(willShow));
+    // Очередь — сетка .queue-grid: .expanded на самой карточке растягивает
+    // её на всю ширину ряда (grid-column:1/-1 в styles.css), соседние
+    // карточки сами переставляются грид-раскладкой, без JS-пересчёта. Вне
+    // .queue-grid (история и другие списки, тоже через bindMovieDetailToggle)
+    // класс ни на что не влияет — там такого CSS-правила нет.
+    card.classList.toggle("expanded", willShow);
     const label = willShow ? "Свернуть" : "Подробнее";
     btn.title = label;
     btn.setAttribute("aria-label", label);
@@ -553,38 +596,100 @@ function bindMovieDetailToggle(card, mv) {
 
 const CHEVRON_DOWN_ICON = '<svg class="icon chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
 
+// Меню действий карточки очереди (три точки в правом верхнем углу) —
+// «Отметить просмотренным»/«Убрать из комнаты» переехали сюда из отдельных
+// текстовых кнопок в ряд (см. план задачи «сетка очереди»). В отличие от
+// roomMenu/csvMenu/accountMenu — по одному фиксированному id на всю
+// страницу — карточек в очереди может быть много, и у каждой своё меню.
+// Вместо N независимых обработчиков document-клика держим одно
+// module-level «какое меню сейчас открыто» и подключаем его к тому же
+// общему закрытию (Escape/клик снаружи/открытие другого меню), что и три
+// меню выше — см. вызовы closeCardMenu() рядом с closeRoomMenu()/
+// closeCsvMenu()/closeAccountMenu() ниже по файлу.
+let openCardMenu = null; // { menu, btn } открытого меню карточки, либо null
+function closeCardMenu() {
+  if (!openCardMenu) return;
+  const { menu, btn } = openCardMenu;
+  menu.hidden = true;
+  btn.setAttribute("aria-expanded", "false");
+  openCardMenu = null;
+}
+function bindMovieCardMenu(card) {
+  const btn = card.querySelector('[data-act="cardMenuBtn"]');
+  const menu = card.querySelector('[data-act="cardMenu"]');
+  btn.onclick = e => {
+    e.stopPropagation();
+    const reopening = openCardMenu && openCardMenu.menu === menu;
+    closeRoomMenu();
+    closeCsvMenu();
+    closeAccountMenu();
+    closeCardMenu();
+    if (reopening) return;
+    menu.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    openCardMenu = { menu, btn };
+  };
+}
+document.addEventListener("click", e => {
+  if (!openCardMenu) return;
+  const { menu, btn } = openCardMenu;
+  if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) closeCardMenu();
+});
+
 // Карточка очереди — только queued (watched теперь отдельным списком в
-// renderHistoryCard ниже, см. renderMovies).
+// renderHistoryCard ниже, см. renderMovies). Раскладка — сетка .queue-grid
+// (index.html): карточка у́же прежней, стрелка «Подробнее» и меню-«…»
+// стоят в углу через .title-row/.title-actions, «Смотреть» — в футере
+// справа (см. .movie-card-footer в styles.css).
 function renderMovieCard(rm, room) {
   const mv = rm.movie;
   const card = el("div", "movie-card");
   const year = mv.year ? ` (${mv.year})` : "";
   card.innerHTML = `
-    <div class="movie-card-head">
-      ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
-      <div class="movie-info">
-        <div class="title">${esc(mv.title)}${esc(year)}</div>
-        <div class="chip-row">${movieChipsHtml(mv)}</div>
+    <div class="title-row">
+      <div class="movie-card-head">
+        ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
+        <div class="movie-info">
+          <div class="title">${esc(mv.title)}${esc(year)}</div>
+          <div class="chip-row">${movieChipsHtml(mv)}</div>
+        </div>
+      </div>
+      <div class="title-actions">
+        <button class="icon-btn xs" data-act="more" type="button" title="Подробнее" aria-label="Подробнее" aria-expanded="false">${CHEVRON_DOWN_ICON}</button>
+        <div class="menu-wrap">
+          <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Действия с фильмом" aria-label="Действия с фильмом" aria-haspopup="true" aria-expanded="false">
+            <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
+          </button>
+          <div class="menu" data-act="cardMenu" hidden>
+            <button class="menu-item" data-act="watched">Отметить просмотренным</button>
+            <button class="menu-item danger" data-act="remove">Убрать из комнаты</button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="movie-detail hidden"></div>
-    <div class="row">
-      <button class="icon-btn xs" data-act="more" type="button" title="Подробнее" aria-label="Подробнее" aria-expanded="false">${CHEVRON_DOWN_ICON}</button>
-      <button class="btn tonal" data-act="watched">Отметить просмотренным</button>
-      <button class="btn outlined danger" data-act="remove">Убрать из комнаты</button>
+    <div class="movie-card-footer">
+      <button class="btn tonal" data-act="watch" type="button">Смотреть</button>
     </div>`;
 
   bindMovieDetailToggle(card, mv);
+  bindMovieCardMenu(card);
 
   card.querySelector('[data-act="watched"]').onclick = () => act(async () => {
+    closeCardMenu();
     await api(`/rooms/${room.id}/movies/${mv.kinopoiskId}/watched`, { method: "POST" });
     await openRoom(room.id);
   }, "Отмечено просмотренным");
 
   card.querySelector('[data-act="remove"]').onclick = () => act(async () => {
+    closeCardMenu();
     await api(`/rooms/${room.id}/movies/${mv.kinopoiskId}`, { method: "DELETE" });
     await openRoom(room.id);
   }, "Фильм убран из комнаты");
+
+  // «Смотреть» — прямой доступ к тому же kinopoisk.cx/film/<id>/, что и на
+  // экране розыгрыша (drawKpBtn); функция не дублируется.
+  card.querySelector('[data-act="watch"]').onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
 
   return card;
 }
@@ -680,27 +785,21 @@ $("importCsvInput").onchange = async () => {
 };
 
 // «Перевыпустить код» — иконка рядом с самим кодом (в .code-box), не отдельная
-// текстовая кнопка. «Отключить приглашение» — редкое/необратимое действие,
-// убрано в маленькое выпадающее меню #codeMenu (тот же паттерн .menu/.menu-item,
-// что и у #roomMenu/#csvMenu, но НЕ смешано с ними — действия с приглашением
-// логически не связаны ни с переименованием/удалением комнаты, ни с CSV, см.
-// план задачи 3). Меню-триггер виден только владельцу и только пока код есть —
-// когда приглашение уже отключено, включить его обратно можно только текстовой
-// кнопкой ниже (редкое действие, отдельное меню для него избыточно).
+// текстовая кнопка. Отключить приглашение из интерфейса теперь нельзя —
+// когда оно уже отключено (для комнат, где это сделали раньше), включить
+// его обратно можно текстовой кнопкой ниже.
 const REFRESH_CODE_ICON = '<svg class="icon" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.3L21 8"/><path d="M21 3v5h-5"/></svg>';
 
 function renderCodeArea(room) {
   const box = $("codeArea");
   box.textContent = "";
   const isOwner = room.myRole === "owner";
-  $("codeMenuWrap").hidden = !(isOwner && room.joinCode);
-  closeCodeMenu();
 
   if (room.joinCode) {
     const wrap = el("div", "code-box");
     const link = `${location.origin}/#/join/${room.joinCode}`;
     const codeEl = el("code", null, room.joinCode);
-    codeEl.title = "Нажмите, чтобы скопировать код";
+    codeEl.title = "Скопировать код";
     codeEl.onclick = async () => {
       try { await navigator.clipboard.writeText(room.joinCode); snack("Код скопирован"); }
       catch { snack(room.joinCode); }
@@ -740,14 +839,6 @@ function renderCodeArea(room) {
   }
 }
 
-$("revokeCodeBtn").onclick = () => act(async () => {
-  closeCodeMenu();
-  const roomId = state.room.room.id;
-  await api(`/rooms/${roomId}/code`, { method: "DELETE" });
-  state.room.room.joinCode = null;
-  renderCodeArea(state.room.room);
-}, "Приглашение отключено");
-
 // Действия с комнатой собраны под кнопкой с тремя точками рядом с названием —
 // раньше три кнопки висели в ряд под заголовком и спорили за внимание с
 // самой комнатой; теперь редкие/опасные действия убраны в выпадающее меню.
@@ -760,7 +851,7 @@ function closeRoomMenu() {
 $("roomMenuBtn").onclick = e => {
   e.stopPropagation();
   closeCsvMenu();
-  closeCodeMenu();
+  closeCardMenu();
   const menu = $("roomMenu");
   const willShow = menu.hidden;
   menu.hidden = !willShow;
@@ -784,7 +875,7 @@ function closeCsvMenu() {
 $("csvMenuBtn").onclick = e => {
   e.stopPropagation();
   closeRoomMenu();
-  closeCodeMenu();
+  closeCardMenu();
   const menu = $("csvMenu");
   const willShow = menu.hidden;
   menu.hidden = !willShow;
@@ -794,30 +885,6 @@ document.addEventListener("click", e => {
   const menu = $("csvMenu");
   if (!menu || menu.hidden) return;
   if (!menu.contains(e.target) && e.target !== $("csvMenuBtn")) closeCsvMenu();
-});
-
-// Меню приглашения (у h2 «Приглашение») — тот же паттерн, что у csvMenu выше:
-// единственный пункт «Отключить приглашение» (см. renderCodeArea) убран сюда,
-// чтобы не путать с действиями комнаты в #roomMenu — они логически не связаны.
-function closeCodeMenu() {
-  const menu = $("codeMenu");
-  if (!menu || menu.hidden) return;
-  menu.hidden = true;
-  $("codeMenuBtn").setAttribute("aria-expanded", "false");
-}
-$("codeMenuBtn").onclick = e => {
-  e.stopPropagation();
-  closeRoomMenu();
-  closeCsvMenu();
-  const menu = $("codeMenu");
-  const willShow = menu.hidden;
-  menu.hidden = !willShow;
-  $("codeMenuBtn").setAttribute("aria-expanded", String(willShow));
-};
-document.addEventListener("click", e => {
-  const menu = $("codeMenu");
-  if (!menu || menu.hidden) return;
-  if (!menu.contains(e.target) && e.target !== $("codeMenuBtn")) closeCodeMenu();
 });
 
 // Меню профиля (шапка) — тот же паттерн, что у меню комнаты выше: клик
@@ -833,7 +900,7 @@ $("accountBtn").onclick = e => {
   e.stopPropagation();
   closeRoomMenu();
   closeCsvMenu();
-  closeCodeMenu();
+  closeCardMenu();
   const menu = $("accountMenu");
   const willShow = menu.hidden;
   if (willShow) {
@@ -850,7 +917,7 @@ document.addEventListener("click", e => {
 });
 document.addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
-  closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCodeMenu();
+  closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCardMenu();
   if (openModalId) closeModal(openModalId);
 });
 
@@ -864,7 +931,7 @@ $("accountMenuLogout").onclick = () => { closeAccountMenu(); auth.logout(); };
 // скроллиться, пока модалка открыта.
 let openModalId = null; // id открытого .modal-backdrop — нужен для Escape
 function openModal(backdropId) {
-  closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCodeMenu();
+  closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCardMenu();
   $(backdropId).classList.remove("hidden");
   document.body.classList.add("modal-open");
   openModalId = backdropId;
@@ -884,7 +951,6 @@ function bindModal(backdropId, openBtnId, closeBtnId) {
 
 bindModal("membersModalBackdrop", "membersBtn", "membersModalClose");
 bindModal("addMovieModalBackdrop", "addMovieBtn", "addMovieModalClose");
-$("addMovieDoneBtn").onclick = () => closeModal("addMovieModalBackdrop");
 
 // Модалка «Фильм» (плитка витрины «Из базы») — своей кнопки-открывашки нет,
 // открывается из renderMovieTile() по клику на конкретную плитку.
