@@ -785,8 +785,10 @@ function renderAddToMenu(kinopoiskId, rooms) {
 // Карточка очереди — только queued (watched теперь отдельным списком в
 // renderHistoryCard ниже, см. renderMovies). Раскладка — сетка .queue-grid
 // (index.html): карточка у́же прежней, стрелка «Подробнее» и меню-«…»
-// стоят в углу через .title-row/.title-actions, «Смотреть» — в футере
-// справа (см. .movie-card-footer в styles.css).
+// стоят в углу через .title-row/.title-actions. «Смотреть» (.movie-card-footer)
+// теперь внутри .movie-info, прижата к низу колонки — та же высокая обложка,
+// что и у истории (см. styles.css), делает текстовый блок короче постера,
+// и кнопка занимает освободившееся место, а не висит отдельным рядом ниже.
 function renderMovieCard(rm, room) {
   const mv = rm.movie;
   const card = el("div", "movie-card");
@@ -796,8 +798,13 @@ function renderMovieCard(rm, room) {
       <div class="movie-card-head">
         ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
         <div class="movie-info">
-          <div class="title">${esc(mv.title)}${esc(year)}</div>
-          <div class="chip-row">${movieChipsHtml(mv)}</div>
+          <div class="movie-info-top">
+            <div class="title">${esc(mv.title)}${esc(year)}</div>
+            <div class="chip-row">${movieChipsHtml(mv)}</div>
+          </div>
+          <div class="movie-card-footer">
+            <button class="btn tonal" data-act="watch" type="button">Смотреть</button>
+          </div>
         </div>
       </div>
       <div class="title-actions">
@@ -813,10 +820,7 @@ function renderMovieCard(rm, room) {
         </div>
       </div>
     </div>
-    <div class="movie-detail hidden"></div>
-    <div class="movie-card-footer">
-      <button class="btn tonal" data-act="watch" type="button">Смотреть</button>
-    </div>`;
+    <div class="movie-detail hidden"></div>`;
 
   bindMovieDetailToggle(card, mv);
   bindMovieCardMenu(card);
@@ -863,14 +867,16 @@ function renderHistoryCard(rm, room, members) {
         <div class="movie-card-head">
           ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
           <div class="movie-info">
-            <div class="title">${esc(mv.title)}${esc(year)}</div>
-            <div class="chip-row">${movieChipsHtml(mv)}</div>
-            <div class="muted sub">Просмотрено ${esc(whenText)} · ${esc(whoText)}</div>
+            <div class="movie-info-top">
+              <div class="title">${esc(mv.title)}${esc(year)}</div>
+              <div class="chip-row">${movieChipsHtml(mv)}</div>
+              <div class="muted sub">Просмотрено ${esc(whenText)} · ${esc(whoText)}</div>
+            </div>
+            <div class="score-row">
+              <div data-act="score"></div>
+              <span class="muted">${rm.mark.avgScore != null ? `Средняя: ${rm.mark.avgScore}${rm.mark.ratingCount > 1 ? ` (${rm.mark.ratingCount})` : ""}` : "Средней оценки пока нет"}</span>
+            </div>
           </div>
-        </div>
-        <div class="score-row">
-          <div data-act="score"></div>
-          <span class="muted">${rm.mark.avgScore != null ? `Средняя: ${rm.mark.avgScore}${rm.mark.ratingCount > 1 ? ` (${rm.mark.ratingCount})` : ""}` : "Средней оценки пока нет"}</span>
         </div>
       </div>
       ${mv.description ? `<div class="history-desc"><p class="movie-desc-preview">${esc(mv.description)}</p></div>` : ""}
@@ -1301,15 +1307,27 @@ const prefersReducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)"
 
 // Сколько полных кругов лента прокручивает мимо кандидатов, прежде чем
 // доехать до результата — только для того, чтобы движение читалось как
-// «крутится», сам результат уже известен (см. renderReel).
+// «крутится», сам результат уже известен (см. renderReel). PREVIEW_LEAD_LAPS
+// — то же самое, но для ленты в покое (превью метода/финальный кадр после
+// прокрутки): кругов перед целью меньше, крутить нечему, просто нужен запас
+// слева от указателя. TRAIL_LAPS — кругов ПОСЛЕ цели, одинаково и в покое, и
+// после прокрутки: без этого лента обрывалась ровно на приехавшем элементе и
+// справа от указателя было пусто — та же дырка, что раньше была слева в
+// покое, просто с другой стороны. Кругов с запасом с обеих сторон достаточно
+// с большим отрывом, чтобы заполнить даже широкий viewport на любом экране.
 const REEL_LAPS = 5;
+const PREVIEW_LEAD_LAPS = 2;
+const TRAIL_LAPS = 2;
 
 /** Горизонтальная карусель постеров-кандидатов: строит .reel-track из
     .reel-item (переиспользует и для живого превью метода в состоянии покоя,
     и для самой прокрутки, см. renderMethodPreview/animateWeightedRandom) и
     переводит её translateX-ом так, чтобы .reel-item под индексом targetIndex
     (в исходном массиве candidates) оказался ровно по центру, под
-    неподвижным .reel-pointer.
+    неподвижным .reel-pointer. Лента всегда строится с запасом кругов ДО и
+    ПОСЛЕ цели (см. константы выше) — и в покое, и на финальном кадре после
+    прокрутки по обе стороны от указателя есть постеры, а не пустота с одной
+    из сторон.
     - animate=false (превью) — лента сразу рисуется в покое на targetIndex,
       без transition.
     - animate=true (сам розыгрыш) — сначала строится несколько кругов по
@@ -1328,14 +1346,13 @@ function renderReel(container, candidates, targetIndex, animate) {
   const pointer = el("div", "reel-pointer");
   const track = el("div", "reel-track");
 
-  let landIndex = targetIndex;
+  // n<=1 — кольцевать нечего (один кандидат или пусто), landIndex/sequence
+  // тривиальны без модульной арифметики (n=0 сломал бы i % n).
+  const leadLaps = doAnimate ? REEL_LAPS : PREVIEW_LEAD_LAPS;
+  const landIndex = n > 1 ? leadLaps * n + targetIndex : targetIndex;
+  const totalItems = n > 1 ? landIndex + 1 + TRAIL_LAPS * n : n;
   const sequence = [];
-  if (doAnimate) {
-    landIndex = REEL_LAPS * n + targetIndex;
-    for (let i = 0; i <= landIndex; i++) sequence.push(candidates[i % n]);
-  } else {
-    for (let i = 0; i < n; i++) sequence.push(candidates[i]);
-  }
+  for (let i = 0; i < totalItems; i++) sequence.push(n > 1 ? candidates[i % n] : candidates[i]);
 
   for (const c of sequence) {
     const item = el("div", "reel-item");

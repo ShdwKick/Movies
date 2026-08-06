@@ -269,6 +269,32 @@ select{
 .movie-info .title{font-weight:650;font-size:15px}
 .chip-row{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.4rem}
 
+/* Обложка покрупнее — только в очереди комнаты и в истории просмотров (там
+   попросили явно), НЕ меняет базовый .movie-poster везде — он тот же класс
+   и в результатах поиска (локальная и глобальная модалки), там размер
+   мельче нарочно, плитки с результатами узкие. */
+.queue-grid .movie-poster, #movieHistoryList .movie-poster{width:8rem;height:12rem}
+/* При такой высокой обложке короткий текстовый блок (название+чипы, у
+   истории ещё и дата) занимает от силы половину высоты — раньше остальное
+   просто пустовало. .movie-info растягивается на высоту постера уже по
+   умолчанию (align-items:stretch у .movie-card-head), тут только заставляем
+   ЕЁ СОДЕРЖИМОЕ разъехаться по этой высоте: текстовый блок вверху
+   (.movie-info-top — общая обёртка для title+chip-row(+дата в истории)),
+   а «Смотреть»/оценка — вниз, а не отдельным рядом ПОД всей шапкой
+   карточки. Тот же приём для обеих карточек, оба узнают друг друга по
+   контейнеру-предку — своего модификатора на .movie-info не заводим, чтобы
+   не плодить классы под одно и то же поведение. */
+.queue-grid .movie-info, #movieHistoryList .movie-info{display:flex;flex-direction:column;justify-content:space-between}
+/* Раньше .movie-card-footer шёл отдельным рядом ПОД всей шапкой карточки
+   (margin-top:.8rem — отступ от .movie-detail над ним), туда и был расчёт
+   зазора. Теперь он внутри .movie-info, зазор уже даёт justify-content —
+   свой margin-top тут лишний, задвоил бы отступ. */
+.queue-grid .movie-info .movie-card-footer{margin-top:0}
+/* Аналогично — .score-row раньше был отдельным рядом ПОД всей шапкой
+   карточки истории (margin-top:.7rem), теперь внутри .movie-info, зазор
+   уже даёт justify-content. */
+#movieHistoryList .score-row{margin-top:0}
+
 /* Карточка результата поиска в модалке «Добавить фильм» — кликабельна
    целиком (клик добавляет фильм в комнату, см. renderMovieResultCard в
    app.js). Это div с role="button", а не настоящий <button>: внутри есть
@@ -583,7 +609,7 @@ ul.plain li:last-child{border-bottom:0}
    рендер (renderReel в app.js) используется и для живого превью метода в
    состоянии покоя (animate=false), и для самой прокрутки (animate=true) —
    поэтому карточки/разметка ровно те же, см. план задачи 2/3. */
-.reel-viewport{position:relative;overflow:hidden;width:min(30rem,92vw);margin:1.4rem auto 0;padding:.6rem 0}
+.reel-viewport{position:relative;overflow:hidden;width:min(40rem,94vw);margin:1.4rem auto 0;padding:.6rem 0}
 .reel-track{display:flex;align-items:flex-start;will-change:transform;transition:transform 3.2s cubic-bezier(.12,.67,.14,1)}
 .reel-item{flex:none;width:9rem;padding:0 .5rem;text-align:center}
 .reel-item .movie-poster{width:8rem;height:12rem;margin:0 auto}
@@ -603,7 +629,7 @@ ul.plain li:last-child{border-bottom:0}
 .reel-pointer::before{top:-.15rem;border-top:.7rem solid var(--flame-tip)}
 .reel-pointer::after{bottom:-.15rem;border-bottom:.7rem solid var(--flame-tip)}
 
-.wheel-wrap{position:relative;width:17rem;max-width:90vw;aspect-ratio:1;margin:1.4rem auto}
+.wheel-wrap{position:relative;width:23rem;max-width:92vw;aspect-ratio:1;margin:1.4rem auto}
 .wheel-wrap svg{width:100%;height:100%;display:block;transition:transform 4.2s cubic-bezier(.12,.67,.14,1)}
 /* Гашение сектора выбывшего кандидата в раунде «На выбывание» — плавно, а не
    рывком, см. animateElimination в app.js. */
