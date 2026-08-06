@@ -12,9 +12,11 @@
  * ниже). Деплой — следующая фаза.
  *
  * Маршрутизация — по хэшу: #/ (список комнат), #/room/<id>, #/room/<id>/draw,
- * #/join/<код>, #/watched (лента просмотренного). Хэш выбран не случайно:
- * redirect_uri в auth сверяется побайтово, а хэш в него не входит — адрес
- * возврата остаётся одним и тем же для любой страницы.
+ * #/join/<код>, #/watched (лента просмотренного), #/my-list (личный список на
+ * просмотр, без привязки к комнате), #/profile (хаб-страница с ссылками на
+ * оба последних экрана — сама ничего не рендерит). Хэш выбран не случайно: redirect_uri в
+ * auth сверяется побайтово, а хэш в него не входит — адрес возврата остаётся
+ * одним и тем же для любой страницы.
  */
 
 const $ = id => document.getElementById(id);
@@ -56,6 +58,20 @@ function snack(text) {
   snackTimer = setTimeout(() => s.classList.remove("show"), 3200);
 }
 
+// ───────────────────────── тема ─────────────────────────
+// Ручной переключатель поверх системной настройки — тот же приём, что в Trip
+// (assets/app.js там же): атрибут на <html>, а не класс, чтобы попадать в
+// [data-theme="dark"]-правила в index.html без лишней специфичности.
+const SUN = '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+const MOON = '<svg class="icon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem("movies.theme", theme);
+  $("themeBtn").innerHTML = theme === "dark" ? SUN : MOON;
+}
+$("themeBtn").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+applyTheme(localStorage.getItem("movies.theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+
 // ───────────────────────── запросы ─────────────────────────
 class ApiError extends Error {
   constructor(status, body) { super(body?.message || body?.error || "ошибка запроса"); this.status = status; this.body = body; }
@@ -95,7 +111,7 @@ async function act(fn, okText) {
 }
 
 // ───────────────────────── старт и маршрутизация ─────────────────────────
-const ROUTE_KEY = "films.route";   // куда вернуть человека после входа: хэш переживает редирект только так
+const ROUTE_KEY = "movies.route";   // куда вернуть человека после входа: хэш переживает редирект только так
 
 async function init() {
   const cfg = await (await fetch("/api/config")).json();
@@ -103,7 +119,7 @@ async function init() {
     authBase: cfg.authBase,
     clientId: cfg.clientId,
     redirectUri: location.origin + location.pathname,   // ровно то, что зарегистрировано в auth
-    storagePrefix: "films",
+    storagePrefix: "movies",
   });
 
   // Обязательно ДО первого запроса к своему API: обменивает ?code=… на токены.
@@ -122,6 +138,8 @@ async function init() {
   state.me = auth.getUser() || state.me;
 
   $("accountMenuWrap").hidden = false;
+  $("globalSearchBtn").hidden = false;
+  $("serviceProfileBtn").hidden = false;
   $("accountBtn").title = "Аккаунт — " + who(state.me);
 
   await route();
@@ -131,6 +149,8 @@ async function init() {
 function showAuthScreen(title, note) {
   showOnly("authView");
   $("accountMenuWrap").hidden = true;
+  $("globalSearchBtn").hidden = true;
+  $("serviceProfileBtn").hidden = true;
   closeAccountMenu();
   $("authTitle").textContent = title;
   $("authNote").textContent = note;
@@ -146,7 +166,11 @@ function goLogin() {
 $("loginBtn").onclick = goLogin;
 
 function showOnly(id) {
-  for (const v of ["authView", "roomsView", "roomView", "drawView", "joinView", "watchedView"]) $(v).hidden = v !== id;
+  for (const v of ["authView", "roomsView", "roomView", "drawView", "joinView", "watchedView", "myListView", "profileView"]) $(v).hidden = v !== id;
+  // Пламя как фон целой страницы допустимо только на экране «нужен вход»
+  // (см. BurningHouse/Design/palette.md) — на всех остальных экранах фон
+  // нейтральный (--md-sys-color-surface).
+  document.body.classList.toggle("auth-bg", id === "authView");
 }
 
 async function route() {
@@ -160,6 +184,8 @@ async function route() {
   if (draw) return showDraw(draw[1]);
   if (room) return openRoom(room[1]);
   if (hash === "#/watched") return showWatched();
+  if (hash === "#/my-list") return showMyList();
+  if (hash === "#/profile") return showProfile();
   return showRooms();
 }
 addEventListener("hashchange", () => { route().catch(console.error); });
@@ -168,12 +194,82 @@ addEventListener("hashchange", () => { route().catch(console.error); });
 async function showRooms() {
   showOnly("roomsView");
   state.room = null;
-  document.title = "Что смотрим — мои комнаты";
+  document.title = "Что смотрим? — мои комнаты";
   const data = await act(() => api("/rooms"));
   if (!data) return;
   state.me = data.me;
   state.rooms = data.rooms;
   renderRooms();
+  renderCachedMovies(state.rooms);
+}
+
+/** Витрина «Из базы» — последние закэшированные фильмы (GET /api/movies).
+    Раньше тут стояла полноразмерная карточка результата поиска — слишком
+    тяжело для главной; теперь компактная плитка (renderMovieTile), клик по
+    которой открывает #movieInfoModalBackdrop с теми же данными (moviePayload
+    уже полный, повторный запрос к сети не нужен). Секция скрыта целиком, пока
+    кэш пуст — план явно требует не показывать пустой блок с заголовком в никуда. */
+async function renderCachedMovies(rooms) {
+  const data = await act(() => api("/movies?limit=24"));
+  const wrap = $("cachedMoviesWrap");
+  if (!data || !data.movies.length) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  const box = $("cachedMoviesList");
+  box.textContent = "";
+  for (const mv of data.movies) box.append(renderMovieTile(mv, rooms));
+}
+
+/** Компактная плитка витрины — постер+название(+год мелким текстом),
+    кликабельна целиком (как .card у комнат: сам <button> — контейнер, без
+    отдельной текст-ссылки внутри). rooms нужен только чтобы передать его
+    дальше в модалку — сама плитка их не показывает. */
+function renderMovieTile(mv, rooms) {
+  const tile = el("button", "movie-tile");
+  tile.type = "button";
+  tile.innerHTML = `
+    ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
+    <div class="title">${esc(mv.title)}</div>
+    ${mv.year ? `<div class="muted sub">${esc(mv.year)}</div>` : ""}`;
+  tile.onclick = () => {
+    renderMovieInfoModal(mv, rooms);
+    openModal("movieInfoModalBackdrop");
+  };
+  return tile;
+}
+
+/** Модалка «Фильм» — открывается по клику на плитку витрины. Один и тот же
+    DOM-узел #movieInfoModalBackdrop переиспользуется под любой фильм: тело
+    перерисовывается целиком (body.innerHTML = ...) при каждом клике, новых
+    id не плодим. Постер+название+чипы — те же данные из moviePayload, что
+    уже на клиенте; режиссёр/актёры/описание — тот же формат, что и
+    «Подробнее» у карточки очереди/истории (bindMovieDetailToggle), но без
+    сворачивания — тут это и есть весь контент модалки. Блок действий —
+    переиспользованный renderAddTargetActions (тот же компонент, что и в
+    строке результата поиска), не копипаста. */
+function renderMovieInfoModal(mv, rooms) {
+  const year = mv.year ? ` (${mv.year})` : "";
+  $("movieInfoModalTitle").textContent = `${mv.title}${year}`;
+  const body = $("movieInfoModalBody");
+  body.innerHTML = `
+    <div class="movie-card-head">
+      ${mv.posterUrl ? `<img class="movie-poster lg" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster lg"></div>'}
+      <div class="movie-info">
+        <div class="title">${esc(mv.title)}${esc(year)}</div>
+        <div class="chip-row">${movieChipsHtml(mv)}</div>
+      </div>
+    </div>
+    <div class="movie-detail"></div>
+    <div class="row" id="movieInfoModalActions"></div>`;
+
+  const roles = [];
+  if (mv.director) roles.push(`<p><b>Режиссёр:</b> ${esc(mv.director)}</p>`);
+  if (mv.actors.length) roles.push(`<p><b>В ролях:</b> ${esc(mv.actors.join(", "))}</p>`);
+  const desc = mv.description
+    ? `<p class="movie-desc${roles.length ? " has-sep" : ""}">${esc(mv.description)}</p>`
+    : "";
+  body.querySelector(".movie-detail").innerHTML = roles.join("") + desc || '<p class="muted">Подробностей нет.</p>';
+
+  renderAddTargetActions(body.querySelector("#movieInfoModalActions"), mv.kinopoiskId, rooms);
 }
 
 function renderRooms() {
@@ -233,7 +329,7 @@ async function openRoom(id) {
 
 function renderRoom() {
   const { room, members } = state.room;
-  document.title = `${room.title} — Что смотрим`;
+  document.title = `${room.title} — Что смотрим?`;
   $("roomTitle").textContent = room.title;
   closeRoomMenu();
   $("deleteRoomBtn").classList.toggle("hidden", room.myRole !== "owner");
@@ -246,7 +342,7 @@ function renderRoom() {
   for (const m of members) {
     const li = el("li");
     const left = el("span", null, who(m) + (m.userId === state.me.id ? " (вы)" : ""));
-    const right = el("span", "chip", m.role === "owner" ? "владелец" : "участник");
+    const right = el("span", "chip" + (m.role === "owner" ? " owner" : ""), m.role === "owner" ? "владелец" : "участник");
     li.append(left, right);
     list.append(li);
   }
@@ -255,12 +351,15 @@ function renderRoom() {
 }
 
 // ───────────────────────── фильмы ─────────────────────────
-function movieMeta(mv) {
-  const parts = [];
-  if (mv.genres.length) parts.push(mv.genres.join(", "));
-  const ratings = [mv.kpRating ? `КП ${mv.kpRating}` : null, mv.imdbRating ? `IMDb ${mv.imdbRating}` : null].filter(Boolean);
-  if (ratings.length) parts.push(ratings.join(" · "));
-  return parts.join(" · ");
+/** Жанры и рейтинги — раньше одна строка текста через точку, теперь чипы
+    (см. .chip в styles.css): жанры отдельным чипом, каждый рейтинг своим,
+    подкрашенным как .chip.rating. */
+function movieChipsHtml(mv) {
+  const chips = [];
+  if (mv.genres.length) chips.push(`<span class="chip">${esc(mv.genres.join(", "))}</span>`);
+  if (mv.kpRating) chips.push(`<span class="chip rating">КП ${esc(mv.kpRating)}</span>`);
+  if (mv.imdbRating) chips.push(`<span class="chip rating">IMDb ${esc(mv.imdbRating)}</span>`);
+  return chips.join("");
 }
 
 async function runMovieSearch() {
@@ -274,29 +373,94 @@ async function runMovieSearch() {
 $("movieSearchBtn").onclick = runMovieSearch;
 $("movieSearchInput").addEventListener("keydown", e => { if (e.key === "Enter") runMovieSearch(); });
 
+/** Общая часть карточки результата поиска — постер+название+чипы, без
+    кнопок действий: те разные в комнатной модалке «Добавить фильм» (одна
+    кнопка «Добавить» — комната уже известна) и в глобальной модалке поиска
+    (выбор комнаты + «В личный список», см. renderSearchResultRow ниже). */
+function renderMovieResultRow(mv) {
+  const row = el("div", "movie-card-head");
+  const year = mv.year ? ` (${mv.year})` : "";
+  row.innerHTML = `
+    ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
+    <div class="movie-info">
+      <div class="title">${esc(mv.title)}${esc(year)}</div>
+      <div class="chip-row">${movieChipsHtml(mv)}</div>
+    </div>`;
+  return row;
+}
+
 function renderMovieResults(movies) {
   const box = $("movieSearchResults");
   box.textContent = "";
   if (!movies.length) { box.append(el("p", "muted", "Ничего не нашлось.")); return; }
   for (const mv of movies) {
-    const row = el("div", "movie-row");
-    const year = mv.year ? ` (${mv.year})` : "";
-    row.innerHTML = `
-      ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
-      <div class="movie-info">
-        <div class="title">${esc(mv.title)}${esc(year)}</div>
-        <div class="muted">${esc(movieMeta(mv))}</div>
-      </div>`;
-    const addBtn = el("button", null, "Добавить");
+    const card = el("div", "movie-card");
+    card.append(renderMovieResultRow(mv));
+    const actions = el("div", "row");
+    const addBtn = el("button", "btn tonal sm", "Добавить");
     addBtn.onclick = () => act(async () => {
       const roomId = state.room.room.id;
       const r = await api(`/rooms/${roomId}/movies`, { method: "POST", body: { kinopoiskId: mv.kinopoiskId } });
       await openRoom(roomId);
       return r;
     }, "Фильм добавлен");
-    row.append(addBtn);
-    box.append(row);
+    actions.append(addBtn);
+    card.append(actions);
+    box.append(card);
   }
+}
+
+/** Переиспользуемый блок «добавить в комнату»: <select> со списком комнат
+    пользователя + кнопка, либо подсказка «Сначала создайте комнату», если
+    комнат нет вовсе (см. план задачи 2). Один и тот же компонент используется
+    и в строке результата глобального поиска (renderSearchResultRow), и в
+    мини-пикере комнаты из личного списка (openRoomPicker). onAdded(roomId)
+    зовётся ПОСЛЕ успешного добавления — вызывающий код решает, закрывать ли
+    модалку и как известить пользователя. */
+function renderRoomPicker(container, kinopoiskId, rooms, onAdded) {
+  container.textContent = "";
+  if (!rooms.length) {
+    container.append(el("span", "muted", "Сначала создайте комнату"));
+    return;
+  }
+  const select = el("select");
+  for (const r of rooms) {
+    const opt = el("option", null, r.title);
+    opt.value = r.id;
+    select.append(opt);
+  }
+  const addBtn = el("button", "btn tonal sm", "Добавить в комнату");
+  addBtn.onclick = () => act(async () => {
+    const roomId = select.value;
+    await api(`/rooms/${roomId}/movies`, { method: "POST", body: { kinopoiskId } });
+    if (onAdded) onAdded(roomId);
+  }, "Фильм добавлен в комнату");
+  container.append(select, addBtn);
+}
+
+/** Блок выбора цели — renderRoomPicker + отдельная кнопка «В личный список»
+    (POST /my-list). Общий компонент для строки результата глобального поиска
+    (renderSearchResultRow) и блока действий в модалке «Фильм»
+    (renderMovieInfoModal) — вызывается, а не копируется. */
+function renderAddTargetActions(container, kinopoiskId, rooms) {
+  renderRoomPicker(container, kinopoiskId, rooms);
+  const listBtn = el("button", "btn tonal sm", "В личный список");
+  listBtn.onclick = () => act(async () => {
+    await api("/my-list", { method: "POST", body: { kinopoiskId } });
+  }, "Добавлено в личный список");
+  container.append(listBtn);
+}
+
+/** Строка результата глобального поиска (шапка, любая комната) — та же
+    строка постер+инфо, что и в комнатной модалке, плюс блок выбора цели
+    (renderAddTargetActions). */
+function renderSearchResultRow(mv, rooms) {
+  const wrap = el("div", "movie-card");
+  wrap.append(renderMovieResultRow(mv));
+  const actions = el("div", "row");
+  renderAddTargetActions(actions, mv.kinopoiskId, rooms);
+  wrap.append(actions);
+  return wrap;
 }
 
 function renderMovies() {
@@ -340,6 +504,7 @@ function renderStarRating(container, kinopoiskId, currentScore, onRated) {
   for (let i = 1; i <= 10; i++) {
     const btn = el("button", "star-btn", "★");
     btn.type = "button";
+    btn.title = String(i);
     btn.setAttribute("aria-label", `Оценка ${i} из 10`);
     btn.onmouseenter = () => paint(i);
     btn.onfocus = () => paint(i);
@@ -359,42 +524,54 @@ function renderStarRating(container, kinopoiskId, currentScore, onRated) {
 }
 
 /** «Подробнее» — раскрывающийся блок с режиссёром/актёрами/описанием, общий
-    для карточки очереди и карточки истории. */
+    для карточки очереди и карточки истории. Кнопка — компактная иконка-шеврон
+    (не текстовая .btn, см. план задачи 2): переворачивается на 180° при
+    разворачивании, .icon-btn.expanded .chevron{transform:rotate(180deg)} в
+    styles.css; общий свитч prefers-reduced-motion там же гасит анимацию. */
 function bindMovieDetailToggle(card, mv) {
-  card.querySelector('[data-act="more"]').onclick = () => {
+  const btn = card.querySelector('[data-act="more"]');
+  btn.onclick = () => {
     const box = card.querySelector(".movie-detail");
     const willShow = box.classList.contains("hidden");
     box.classList.toggle("hidden");
+    btn.classList.toggle("expanded", willShow);
+    btn.setAttribute("aria-expanded", String(willShow));
+    const label = willShow ? "Свернуть" : "Подробнее";
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
     if (willShow) {
-      const parts = [];
-      if (mv.director) parts.push(`<p><b>Режиссёр:</b> ${esc(mv.director)}</p>`);
-      if (mv.actors.length) parts.push(`<p><b>В ролях:</b> ${esc(mv.actors.join(", "))}</p>`);
-      if (mv.description) parts.push(`<p>${esc(mv.description)}</p>`);
-      box.innerHTML = parts.join("") || '<p class="muted">Подробностей нет.</p>';
+      const roles = [];
+      if (mv.director) roles.push(`<p><b>Режиссёр:</b> ${esc(mv.director)}</p>`);
+      if (mv.actors.length) roles.push(`<p><b>В ролях:</b> ${esc(mv.actors.join(", "))}</p>`);
+      const desc = mv.description
+        ? `<p class="movie-desc${roles.length ? " has-sep" : ""}">${esc(mv.description)}</p>`
+        : "";
+      box.innerHTML = roles.join("") + desc || '<p class="muted">Подробностей нет.</p>';
     }
   };
 }
+
+const CHEVRON_DOWN_ICON = '<svg class="icon chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
 
 // Карточка очереди — только queued (watched теперь отдельным списком в
 // renderHistoryCard ниже, см. renderMovies).
 function renderMovieCard(rm, room) {
   const mv = rm.movie;
-  const card = el("div", "card");
-  card.style.cursor = "default"; // .card рассчитан на кликабельную кнопку целиком — тут кликабельны только вложенные кнопки
+  const card = el("div", "movie-card");
   const year = mv.year ? ` (${mv.year})` : "";
   card.innerHTML = `
     <div class="movie-card-head">
       ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
       <div class="movie-info">
         <div class="title">${esc(mv.title)}${esc(year)}</div>
-        <div class="sub muted">${esc(movieMeta(mv))}</div>
+        <div class="chip-row">${movieChipsHtml(mv)}</div>
       </div>
     </div>
     <div class="movie-detail hidden"></div>
     <div class="row">
-      <button class="ghost" data-act="more">Подробнее</button>
-      <button data-act="watched">Отметить просмотренным</button>
-      <button class="danger" data-act="remove">Убрать из комнаты</button>
+      <button class="icon-btn xs" data-act="more" type="button" title="Подробнее" aria-label="Подробнее" aria-expanded="false">${CHEVRON_DOWN_ICON}</button>
+      <button class="btn tonal" data-act="watched">Отметить просмотренным</button>
+      <button class="btn outlined danger" data-act="remove">Убрать из комнаты</button>
     </div>`;
 
   bindMovieDetailToggle(card, mv);
@@ -417,8 +594,7 @@ function renderMovieCard(rm, room) {
 // личная/средняя оценка (уместна тут же, раз фильм уже просмотрен).
 function renderHistoryCard(rm, room, members) {
   const mv = rm.movie;
-  const card = el("div", "card");
-  card.style.cursor = "default";
+  const card = el("div", "movie-card");
   const year = mv.year ? ` (${mv.year})` : "";
   const watcher = members.find(m => m.userId === rm.watchedBy);
   const whoText = watcher ? who(watcher) : "кто-то из участников";
@@ -428,14 +604,14 @@ function renderHistoryCard(rm, room, members) {
       ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
       <div class="movie-info">
         <div class="title">${esc(mv.title)}${esc(year)}</div>
-        <div class="sub muted">${esc(movieMeta(mv))}</div>
-        <div class="muted">Просмотрено ${esc(whenText)} · ${esc(whoText)}</div>
+        <div class="chip-row">${movieChipsHtml(mv)}</div>
+        <div class="muted sub">Просмотрено ${esc(whenText)} · ${esc(whoText)}</div>
       </div>
     </div>
     <div class="movie-detail hidden"></div>
     <div class="row">
-      <button class="ghost" data-act="more">Подробнее</button>
-      <button class="ghost" data-act="watched">Вернуть в очередь</button>
+      <button class="icon-btn xs" data-act="more" type="button" title="Подробнее" aria-label="Подробнее" aria-expanded="false">${CHEVRON_DOWN_ICON}</button>
+      <button class="btn tonal" data-act="watched">Вернуть в очередь</button>
     </div>
     <div class="score-row">
       <div data-act="score"></div>
@@ -478,7 +654,7 @@ $("exportCsvBtn").onclick = () => act(async () => {
   URL.revokeObjectURL(url);
 }, "CSV экспортирован");
 
-$("importCsvBtn").onclick = () => $("importCsvInput").click();
+$("importCsvBtn").onclick = () => { closeCsvMenu(); $("importCsvInput").click(); };
 $("importCsvInput").onchange = async () => {
   const input = $("importCsvInput");
   const file = input.files && input.files[0];
@@ -503,10 +679,22 @@ $("importCsvInput").onchange = async () => {
   snack("CSV: " + parts.join(", "));
 };
 
+// «Перевыпустить код» — иконка рядом с самим кодом (в .code-box), не отдельная
+// текстовая кнопка. «Отключить приглашение» — редкое/необратимое действие,
+// убрано в маленькое выпадающее меню #codeMenu (тот же паттерн .menu/.menu-item,
+// что и у #roomMenu/#csvMenu, но НЕ смешано с ними — действия с приглашением
+// логически не связаны ни с переименованием/удалением комнаты, ни с CSV, см.
+// план задачи 3). Меню-триггер виден только владельцу и только пока код есть —
+// когда приглашение уже отключено, включить его обратно можно только текстовой
+// кнопкой ниже (редкое действие, отдельное меню для него избыточно).
+const REFRESH_CODE_ICON = '<svg class="icon" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.3L21 8"/><path d="M21 3v5h-5"/></svg>';
+
 function renderCodeArea(room) {
   const box = $("codeArea");
   box.textContent = "";
   const isOwner = room.myRole === "owner";
+  $("codeMenuWrap").hidden = !(isOwner && room.joinCode);
+  closeCodeMenu();
 
   if (room.joinCode) {
     const wrap = el("div", "code-box");
@@ -518,34 +706,30 @@ function renderCodeArea(room) {
       catch { snack(room.joinCode); }
     };
     wrap.append(codeEl);
-    const copyBtn = el("button", "ghost btn-sm", "Скопировать ссылку");
+    const copyBtn = el("button", "btn tonal sm", "Скопировать ссылку");
     copyBtn.onclick = async () => {
       try { await navigator.clipboard.writeText(link); snack("Ссылка скопирована"); }
       catch { snack(link); }
     };
     wrap.append(copyBtn);
-    box.append(wrap);
     if (isOwner) {
-      const row = el("div", "row");
-      const reissue = el("button", "ghost", "Перевыпустить код");
+      const reissue = el("button", "icon-btn xs");
+      reissue.type = "button";
+      reissue.title = "Перевыпустить код";
+      reissue.setAttribute("aria-label", "Перевыпустить код");
+      reissue.innerHTML = REFRESH_CODE_ICON;
       reissue.onclick = () => act(async () => {
         const r = await api(`/rooms/${room.id}/code`, { method: "POST" });
         state.room.room.joinCode = r.joinCode;
         renderCodeArea(state.room.room);
       }, "Новый код готов");
-      const revoke = el("button", "danger", "Отключить приглашение");
-      revoke.onclick = () => act(async () => {
-        await api(`/rooms/${room.id}/code`, { method: "DELETE" });
-        state.room.room.joinCode = null;
-        renderCodeArea(state.room.room);
-      }, "Приглашение отключено");
-      row.append(reissue, revoke);
-      box.append(row);
+      wrap.append(reissue);
     }
+    box.append(wrap);
   } else {
     box.append(el("p", "muted", "Приглашение отключено."));
     if (isOwner) {
-      const enable = el("button", "ghost", "Включить приглашение");
+      const enable = el("button", "btn tonal", "Включить приглашение");
       enable.onclick = () => act(async () => {
         const r = await api(`/rooms/${room.id}/code`, { method: "POST" });
         state.room.room.joinCode = r.joinCode;
@@ -555,6 +739,14 @@ function renderCodeArea(room) {
     }
   }
 }
+
+$("revokeCodeBtn").onclick = () => act(async () => {
+  closeCodeMenu();
+  const roomId = state.room.room.id;
+  await api(`/rooms/${roomId}/code`, { method: "DELETE" });
+  state.room.room.joinCode = null;
+  renderCodeArea(state.room.room);
+}, "Приглашение отключено");
 
 // Действия с комнатой собраны под кнопкой с тремя точками рядом с названием —
 // раньше три кнопки висели в ряд под заголовком и спорили за внимание с
@@ -567,6 +759,8 @@ function closeRoomMenu() {
 }
 $("roomMenuBtn").onclick = e => {
   e.stopPropagation();
+  closeCsvMenu();
+  closeCodeMenu();
   const menu = $("roomMenu");
   const willShow = menu.hidden;
   menu.hidden = !willShow;
@@ -576,6 +770,54 @@ document.addEventListener("click", e => {
   const menu = $("roomMenu");
   if (!menu || menu.hidden) return;
   if (!menu.contains(e.target) && e.target !== $("roomMenuBtn")) closeRoomMenu();
+});
+
+// Меню экспорта/импорта CSV — тот же паттерн, что и меню комнаты: раньше
+// это были две отдельные кнопки в ряд, теперь один триггер-«…» рядом с
+// заголовком «Фильмы» и выпадающий список из двух пунктов.
+function closeCsvMenu() {
+  const menu = $("csvMenu");
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  $("csvMenuBtn").setAttribute("aria-expanded", "false");
+}
+$("csvMenuBtn").onclick = e => {
+  e.stopPropagation();
+  closeRoomMenu();
+  closeCodeMenu();
+  const menu = $("csvMenu");
+  const willShow = menu.hidden;
+  menu.hidden = !willShow;
+  $("csvMenuBtn").setAttribute("aria-expanded", String(willShow));
+};
+document.addEventListener("click", e => {
+  const menu = $("csvMenu");
+  if (!menu || menu.hidden) return;
+  if (!menu.contains(e.target) && e.target !== $("csvMenuBtn")) closeCsvMenu();
+});
+
+// Меню приглашения (у h2 «Приглашение») — тот же паттерн, что у csvMenu выше:
+// единственный пункт «Отключить приглашение» (см. renderCodeArea) убран сюда,
+// чтобы не путать с действиями комнаты в #roomMenu — они логически не связаны.
+function closeCodeMenu() {
+  const menu = $("codeMenu");
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  $("codeMenuBtn").setAttribute("aria-expanded", "false");
+}
+$("codeMenuBtn").onclick = e => {
+  e.stopPropagation();
+  closeRoomMenu();
+  closeCsvMenu();
+  const menu = $("codeMenu");
+  const willShow = menu.hidden;
+  menu.hidden = !willShow;
+  $("codeMenuBtn").setAttribute("aria-expanded", String(willShow));
+};
+document.addEventListener("click", e => {
+  const menu = $("codeMenu");
+  if (!menu || menu.hidden) return;
+  if (!menu.contains(e.target) && e.target !== $("codeMenuBtn")) closeCodeMenu();
 });
 
 // Меню профиля (шапка) — тот же паттерн, что у меню комнаты выше: клик
@@ -590,6 +832,8 @@ function closeAccountMenu() {
 $("accountBtn").onclick = e => {
   e.stopPropagation();
   closeRoomMenu();
+  closeCsvMenu();
+  closeCodeMenu();
   const menu = $("accountMenu");
   const willShow = menu.hidden;
   if (willShow) {
@@ -604,10 +848,96 @@ document.addEventListener("click", e => {
   if (!menu || menu.hidden) return;
   if (!menu.contains(e.target) && e.target !== $("accountBtn")) closeAccountMenu();
 });
-document.addEventListener("keydown", e => { if (e.key === "Escape") { closeRoomMenu(); closeAccountMenu(); } });
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCodeMenu();
+  if (openModalId) closeModal(openModalId);
+});
 
 $("accountMenuManage").onclick = () => { closeAccountMenu(); window.open(auth.accountUrl(), "_blank", "noopener"); };
 $("accountMenuLogout").onclick = () => { closeAccountMenu(); auth.logout(); };
+
+// ───────────────────────── модалки (участники, добавление фильма) ─────────────────────────
+// Общий паттерн для двух модалок ниже: подложка на весь экран + карточка по
+// центру, закрытие по крестику/клику по подложке/Escape (Escape — общий
+// обработчик выше, вместе с закрытием меню). body.modal-open не даёт фону
+// скроллиться, пока модалка открыта.
+let openModalId = null; // id открытого .modal-backdrop — нужен для Escape
+function openModal(backdropId) {
+  closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCodeMenu();
+  $(backdropId).classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  openModalId = backdropId;
+}
+function closeModal(backdropId) {
+  const b = $(backdropId);
+  if (!b || b.classList.contains("hidden")) return;
+  b.classList.add("hidden");
+  document.body.classList.remove("modal-open");
+  if (openModalId === backdropId) openModalId = null;
+}
+function bindModal(backdropId, openBtnId, closeBtnId) {
+  if (openBtnId) $(openBtnId).onclick = () => openModal(backdropId);
+  if (closeBtnId) $(closeBtnId).onclick = () => closeModal(backdropId);
+  $(backdropId).addEventListener("click", e => { if (e.target === $(backdropId)) closeModal(backdropId); });
+}
+
+bindModal("membersModalBackdrop", "membersBtn", "membersModalClose");
+bindModal("addMovieModalBackdrop", "addMovieBtn", "addMovieModalClose");
+$("addMovieDoneBtn").onclick = () => closeModal("addMovieModalBackdrop");
+
+// Модалка «Фильм» (плитка витрины «Из базы») — своей кнопки-открывашки нет,
+// открывается из renderMovieTile() по клику на конкретную плитку.
+bindModal("movieInfoModalBackdrop", null, "movieInfoModalClose");
+
+// ───────────────────────── глобальный поиск (шапка, любая комната) ─────────────────────────
+// По сути то же самое, что модалка «Добавить фильм» внутри комнаты выше, но
+// без заранее известной комнаты: у каждого результата — выбор цели
+// (renderRoomPicker) вместо одной кнопки «Добавить» (см. план задачи 2).
+bindModal("globalSearchModalBackdrop", null, "globalSearchModalClose");
+$("globalSearchDoneBtn").onclick = () => closeModal("globalSearchModalBackdrop");
+$("globalSearchBtn").onclick = () => {
+  $("globalSearchInput").value = "";
+  $("globalSearchResults").textContent = "";
+  openModal("globalSearchModalBackdrop");
+};
+
+async function runGlobalSearch() {
+  const q = $("globalSearchInput").value.trim();
+  if (!q) return;
+  $("globalSearchResults").textContent = "";
+  const data = await act(() => api("/search?q=" + encodeURIComponent(q)));
+  if (!data) return;
+  // Список комнат — свежий на каждый поиск: пока модалка открыта, человек
+  // вполне мог создать новую комнату в другой вкладке/раньше в этой сессии.
+  const roomsData = await act(() => api("/rooms"));
+  renderGlobalSearchResults(data.movies, roomsData ? roomsData.rooms : []);
+}
+$("globalSearchSubmitBtn").onclick = runGlobalSearch;
+$("globalSearchInput").addEventListener("keydown", e => { if (e.key === "Enter") runGlobalSearch(); });
+
+function renderGlobalSearchResults(movies, rooms) {
+  const box = $("globalSearchResults");
+  box.textContent = "";
+  if (!movies.length) { box.append(el("p", "muted", "Ничего не нашлось.")); return; }
+  for (const mv of movies) box.append(renderSearchResultRow(mv, rooms));
+}
+
+// ───────────────────────── мини-пикер комнаты (из личного списка) ─────────────────────────
+// Тот же renderRoomPicker, что и в глобальном поиске, но в отдельной модалке:
+// на экране «Мой список» комната заранее неизвестна, а inline-строка выбора
+// там неуместна (карточка уже итак насыщена действиями).
+bindModal("roomPickModalBackdrop", null, "roomPickModalClose");
+async function openRoomPicker(kinopoiskId) {
+  openModal("roomPickModalBackdrop");
+  const body = $("roomPickBody");
+  body.textContent = "";
+  body.append(el("p", "muted", "Загрузка…"));
+  const data = await act(() => api("/rooms"));
+  body.textContent = "";
+  if (!data) return;
+  renderRoomPicker(body, kinopoiskId, data.rooms, () => closeModal("roomPickModalBackdrop"));
+}
 
 $("renameRoomBtn").onclick = () => act(async () => {
   closeRoomMenu();
@@ -668,11 +998,13 @@ function renderDrawSetup() {
 }
 
 function updateMethodButtons() {
-  $("methodWeightedBtn").classList.toggle("active", drawState.method === "weighted_random");
-  $("methodWheelBtn").classList.toggle("active", drawState.method === "wheel");
+  $("methodWeightedBtn").classList.toggle("sel", drawState.method === "weighted_random");
+  $("methodWheelBtn").classList.toggle("sel", drawState.method === "wheel");
+  $("methodEliminationBtn").classList.toggle("sel", drawState.method === "elimination");
 }
 $("methodWeightedBtn").onclick = () => { if (!drawState) return; drawState.method = "weighted_random"; updateMethodButtons(); };
 $("methodWheelBtn").onclick = () => { if (!drawState) return; drawState.method = "wheel"; updateMethodButtons(); };
+$("methodEliminationBtn").onclick = () => { if (!drawState) return; drawState.method = "elimination"; updateMethodButtons(); };
 
 $("drawStartBtn").onclick = async () => {
   if (!drawState) return;
@@ -688,6 +1020,7 @@ $("drawStartBtn").onclick = async () => {
   stage.innerHTML = "";
 
   if (drawState.method === "wheel") await animateWheel(stage, data.candidates, data.resultKinopoiskId);
+  else if (drawState.method === "elimination") await animateElimination(stage, data.candidates, data.rounds, data.resultKinopoiskId);
   else await animateWeightedRandom(stage, data.candidates, data.resultKinopoiskId);
 
   showDrawResult(data.candidates, data.resultKinopoiskId);
@@ -734,56 +1067,69 @@ function animateWeightedRandom(container, candidates, resultId) {
 // отражая вероятность, не только визуал.
 const WHEEL_COLORS = ["#ff3d5a", "#7f1d1d", "#ff7a8f", "#c81e3a", "#a13350", "#ffb3c0", "#e0526d", "#5c1420"];
 
-function animateWheel(container, candidates, resultId) {
+/** Рисует SVG-колесо (секторы по весу кандидата + легенда) в container,
+    полностью заменяя его содержимое. Общая часть между обычным розыгрышем
+    (animateWheel) и каждым раундом «На выбывание» (animateElimination) —
+    выбывание крутит то же колесо, просто с уменьшающимся набором кандидатов
+    на каждой итерации. Каждый <path> сектора помечен data-kp — по этому
+    атрибуту animateElimination гасит ровно выбывший сектор. Возвращает
+    {svg, mids} — mids нужен spinWheelTo ниже, чтобы знать угол остановки. */
+function renderWheelSvg(container, candidates) {
+  container.textContent = "";
+  const n = candidates.length;
+  const totalWeight = candidates.reduce((s, c) => s + (c.weight || 1), 0) || 1;
+
+  const size = 260, r = 122, cx = 130, cy = 130;
+  const toXY = (deg, radius) => {
+    const rad = (deg * Math.PI) / 180;
+    return [cx + radius * Math.sin(rad), cy - radius * Math.cos(rad)];
+  };
+
+  let angle = 0;
+  const sectorsSvg = [];
+  const labelsSvg = [];
+  const legendItems = [];
+  const mids = [];
+  candidates.forEach((c, i) => {
+    const sweep = 360 * ((c.weight || 1) / totalWeight);
+    const startA = angle, endA = angle + sweep;
+    const mid = (startA + endA) / 2;
+    mids.push(mid);
+    const color = WHEEL_COLORS[i % WHEEL_COLORS.length];
+    const [x1, y1] = toXY(startA, r);
+    const [x2, y2] = toXY(endA, r);
+    const largeArc = sweep > 180 ? 1 : 0;
+    sectorsSvg.push(`<path data-kp="${c.kinopoiskId}" d="M${cx},${cy} L${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r} 0 ${largeArc} 1 ${x2.toFixed(2)},${y2.toFixed(2)} Z" fill="${color}" stroke="var(--md-sys-color-surface)" stroke-width="1.5"/>`);
+    if (n <= 24) {
+      const [lx, ly] = toXY(mid, r * 0.62);
+      labelsSvg.push(`<text class="sector-label" x="${lx.toFixed(2)}" y="${ly.toFixed(2)}">${i + 1}</text>`);
+    }
+    legendItems.push(`<span><span class="dot" style="background:${color}"></span>${i + 1}. ${esc(c.title || "")}${c.year ? ` (${c.year})` : ""}</span>`);
+    angle = endA;
+  });
+
+  const wrap = el("div", "wheel-wrap");
+  wrap.innerHTML = `
+    <div class="wheel-pointer"></div>
+    <svg viewBox="0 0 ${size} ${size}"><g>${sectorsSvg.join("")}${labelsSvg.join("")}</g></svg>`;
+  container.append(wrap);
+  const legend = el("div", "wheel-legend");
+  legend.innerHTML = legendItems.join("");
+  container.append(legend);
+
+  return { svg: wrap.querySelector("svg"), mids };
+}
+
+/** Крутит уже отрисованное renderWheelSvg колесо так, чтобы центр сектора
+    targetIndex остановился под неподвижным указателем сверху (0°) — колесо
+    крутится, указатель нет. При prefers-reduced-motion угол выставляется
+    сразу, без перехода. Общая механика вращения для одиночного розыгрыша
+    (animateWheel) и каждого раунда выбывания (animateElimination). */
+function spinWheelTo(svg, mids, targetIndex) {
   return new Promise(resolve => {
-    const n = candidates.length;
-    const resultIndex = Math.max(0, candidates.findIndex(c => c.kinopoiskId === resultId));
-    const totalWeight = candidates.reduce((s, c) => s + (c.weight || 1), 0) || 1;
-
-    const size = 260, r = 122, cx = 130, cy = 130;
-    const toXY = (deg, radius) => {
-      const rad = (deg * Math.PI) / 180;
-      return [cx + radius * Math.sin(rad), cy - radius * Math.cos(rad)];
-    };
-
-    let angle = 0;
-    const sectorsSvg = [];
-    const labelsSvg = [];
-    const legendItems = [];
-    const mids = [];
-    candidates.forEach((c, i) => {
-      const sweep = 360 * ((c.weight || 1) / totalWeight);
-      const startA = angle, endA = angle + sweep;
-      const mid = (startA + endA) / 2;
-      mids.push(mid);
-      const color = WHEEL_COLORS[i % WHEEL_COLORS.length];
-      const [x1, y1] = toXY(startA, r);
-      const [x2, y2] = toXY(endA, r);
-      const largeArc = sweep > 180 ? 1 : 0;
-      sectorsSvg.push(`<path d="M${cx},${cy} L${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r} 0 ${largeArc} 1 ${x2.toFixed(2)},${y2.toFixed(2)} Z" fill="${color}" stroke="var(--dawn-1)" stroke-width="1.5"/>`);
-      if (n <= 24) {
-        const [lx, ly] = toXY(mid, r * 0.62);
-        labelsSvg.push(`<text class="sector-label" x="${lx.toFixed(2)}" y="${ly.toFixed(2)}">${i + 1}</text>`);
-      }
-      legendItems.push(`<span><span class="dot" style="background:${color}"></span>${i + 1}. ${esc(c.title || "")}${c.year ? ` (${c.year})` : ""}</span>`);
-      angle = endA;
-    });
-
-    const wrap = el("div", "wheel-wrap");
-    wrap.innerHTML = `
-      <div class="wheel-pointer"></div>
-      <svg viewBox="0 0 ${size} ${size}"><g>${sectorsSvg.join("")}${labelsSvg.join("")}</g></svg>`;
-    container.append(wrap);
-    const legend = el("div", "wheel-legend");
-    legend.innerHTML = legendItems.join("");
-    container.append(legend);
-
-    const svg = wrap.querySelector("svg");
     const reduced = prefersReducedMotion();
     const fullSpins = reduced ? 0 : 6;
-    // Поворачиваем так, чтобы центр сектора результата оказался под
-    // неподвижным указателем сверху (0°) — колесо крутится, указатель нет.
-    const rotation = fullSpins * 360 - mids[resultIndex];
+    const rotation = fullSpins * 360 - mids[targetIndex];
 
     if (reduced) { svg.style.transition = "none"; svg.style.transform = `rotate(${rotation}deg)`; return resolve(); }
 
@@ -800,6 +1146,42 @@ function animateWheel(container, candidates, resultId) {
   });
 }
 
+function animateWheel(container, candidates, resultId) {
+  const resultIndex = Math.max(0, candidates.findIndex(c => c.kinopoiskId === resultId));
+  const { svg, mids } = renderWheelSvg(container, candidates);
+  return spinWheelTo(svg, mids, resultIndex);
+}
+
+/** Колесо с выбыванием: один раунд из rounds (пришедших от сервера, см.
+    POST /rooms/:id/draw и selection.pickElimination) — это одна прокрутка
+    того же renderWheelSvg/spinWheelTo, что и обычное колесо, но целится не в
+    результат, а в выбывающего кандидата ЭТОГО раунда; после остановки его
+    сектор гасится (opacity), короткая пауза, чтобы можно было уследить, кто
+    выбыл, — и колесо пересобирается уже без него для следующего раунда.
+    Порядок и состав раундов сервер уже зафиксировал, фронт их не выбирает,
+    только визуализирует. При prefers-reduced-motion раунды не проигрываются
+    — колесо сразу встаёт на итоговый результат (resultId), без покруток. */
+async function animateElimination(container, candidates, rounds, resultId) {
+  const resultIndex = Math.max(0, candidates.findIndex(c => c.kinopoiskId === resultId));
+  if (prefersReducedMotion() || !rounds || !rounds.length) {
+    const { svg, mids } = renderWheelSvg(container, candidates);
+    await spinWheelTo(svg, mids, resultIndex);
+    return;
+  }
+
+  let remaining = candidates.slice();
+  for (const round of rounds) {
+    const targetIndex = remaining.findIndex(c => c.kinopoiskId === round.eliminated);
+    if (targetIndex === -1) continue;   // рассинхрон с сервером — пропускаем раунд, не роняем анимацию
+    const { svg, mids } = renderWheelSvg(container, remaining);
+    await spinWheelTo(svg, mids, targetIndex);
+    const sector = svg.querySelector(`path[data-kp="${round.eliminated}"]`);
+    if (sector) sector.style.opacity = ".25";
+    await new Promise(r => setTimeout(r, 500));
+    remaining = remaining.filter(c => c.kinopoiskId !== round.eliminated);
+  }
+}
+
 function showDrawResult(candidates, resultId) {
   const mv = candidates.find(c => c.kinopoiskId === resultId) || {};
   const roomId = drawState.roomId;
@@ -812,11 +1194,11 @@ function showDrawResult(candidates, resultId) {
       <h2>${esc(mv.title || "")}${esc(year)}</h2>
     </div>
     <div class="row result-actions">
-      <button class="ghost" id="drawKpBtn">Смотреть на Кинопоиске</button>
-      <button id="drawWatchedBtn">Отметить просмотренным</button>
+      <button class="btn outlined" id="drawKpBtn">Смотреть на Кинопоиске</button>
+      <button class="btn filled" id="drawWatchedBtn">Отметить просмотренным</button>
     </div>
     <div class="row result-actions">
-      <button class="ghost" id="drawAgainBtn">Крутить ещё раз</button>
+      <button class="btn outlined" id="drawAgainBtn">Крутить ещё раз</button>
     </div>`;
   $("drawKpBtn").onclick = () => window.open(kinopoiskCxUrl(resultId), "_blank", "noopener");
   $("drawWatchedBtn").onclick = () => act(async () => {
@@ -843,10 +1225,25 @@ async function showJoin(code) {
   };
 }
 
+// ───────────────────────── профиль сервиса (хаб) ─────────────────────────
+// Личные фильмовые данные ВНУТРИ этого сервиса (не аккаунт BurningHouse) —
+// раньше две невзрачные текстовые ссылки висели прямо на #roomsView, теперь
+// иконка #serviceProfileBtn в шапке ведёт на #/profile, а сама страница
+// только перенаправляет на уже существующие #/watched и #/my-list (см. план
+// задачи 2) — их рендеринг не дублируем.
+$("serviceProfileBtn").onclick = () => { location.hash = "#/profile"; };
+$("profileWatchedBtn").onclick = () => { location.hash = "#/watched"; };
+$("profileMyListBtn").onclick = () => { location.hash = "#/my-list"; };
+
+async function showProfile() {
+  showOnly("profileView");
+  document.title = "Что смотрим? — мои фильмы";
+}
+
 // ───────────────────────── что мы смотрели ─────────────────────────
 async function showWatched() {
   showOnly("watchedView");
-  document.title = "Что смотрим — что мы смотрели";
+  document.title = "Что смотрим? — что мы смотрели";
   const data = await act(() => api("/watched"));
   if (!data) return;
   renderWatched(data.movies);
@@ -858,20 +1255,66 @@ function renderWatched(items) {
   list.textContent = "";
   for (const it of items) {
     const mv = it.movie;
-    const row = el("div", "movie-row");
+    const card = el("div", "movie-card");
     const year = mv.year ? ` (${mv.year})` : "";
     const scoreParts = [
       it.myScore ? `Моя оценка: ${it.myScore}` : "Без моей оценки",
       it.avgScore != null ? `средняя ${it.avgScore}${it.ratingCount > 1 ? ` (${it.ratingCount})` : ""}` : null,
     ].filter(Boolean).join(" · ");
-    row.innerHTML = `
-      ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
-      <div class="movie-info">
-        <div class="title">${esc(mv.title)}${esc(year)}</div>
-        <div class="muted">${esc(movieMeta(mv))}</div>
-        <div class="muted">${esc(scoreParts)}</div>
+    card.innerHTML = `
+      <div class="movie-card-head">
+        ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
+        <div class="movie-info">
+          <div class="title">${esc(mv.title)}${esc(year)}</div>
+          <div class="chip-row">${movieChipsHtml(mv)}</div>
+          <div class="muted sub">${esc(scoreParts)}</div>
+        </div>
       </div>`;
-    list.append(row);
+    list.append(card);
+  }
+}
+
+// ───────────────────────── личный список на просмотр ─────────────────────────
+// Глобально, без привязки к комнате (см. план задачи 1) — GET/POST/DELETE
+// /api/my-list. Добавляют сюда через глобальный поиск в шапке (см.
+// renderSearchResultRow выше); на этом экране можно только убрать фильм или
+// закинуть его в конкретную комнату через мини-пикер (openRoomPicker).
+async function showMyList() {
+  showOnly("myListView");
+  document.title = "Что смотрим? — мой список";
+  const data = await act(() => api("/my-list"));
+  if (!data) return;
+  renderMyList(data.movies);
+}
+
+function renderMyList(items) {
+  $("myListEmpty").hidden = items.length > 0;
+  const list = $("myListItems");
+  list.textContent = "";
+  for (const it of items) {
+    const mv = it.movie;
+    const card = el("div", "movie-card");
+    const year = mv.year ? ` (${mv.year})` : "";
+    card.innerHTML = `
+      <div class="movie-card-head">
+        ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
+        <div class="movie-info">
+          <div class="title">${esc(mv.title)}${esc(year)}</div>
+          <div class="chip-row">${movieChipsHtml(mv)}</div>
+        </div>
+      </div>
+      <div class="row">
+        <button class="btn tonal" data-act="pick">Добавить в комнату</button>
+        <button class="btn outlined danger" data-act="remove">Убрать из списка</button>
+      </div>`;
+
+    card.querySelector('[data-act="pick"]').onclick = () => openRoomPicker(mv.kinopoiskId);
+    card.querySelector('[data-act="remove"]').onclick = () => act(async () => {
+      await api(`/my-list/${mv.kinopoiskId}`, { method: "DELETE" });
+      await showMyList();
+    }, "Убрано из списка");
+
+    list.append(card);
   }
 }
 

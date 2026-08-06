@@ -1,9 +1,9 @@
-name: bh-films
+name: bh-movies
 
 services:
-  films:
-    image: shadowkick/films:latest
-    container_name: films
+  movies:
+    image: shadowkick/movies:latest
+    container_name: movies
     restart: unless-stopped
     labels:
       # Разрешаем Watchtower обновлять контейнер автоматически, когда в Docker Hub
@@ -17,20 +17,20 @@ services:
       # Общий auth-сервис. ОБЯЗАТЕЛЬНО и ровно тот адрес, что задан у auth в ISSUER:
       # он подписан внутрь токенов и сверяется побайтово. Без него сервис не стартует.
       AUTH_ISSUER: https://auth.burninghouse.ru
-      AUTH_CLIENT_ID: films
+      AUTH_CLIENT_ID: movies
       # Ключ poiskkino.dev. Берётся из файла .env рядом с этим compose (права 600)
       # и НИКОГДА не попадает ни в репозиторий, ни в образ: образ публичный, а
       # секрет внутри образа — секрет для всех.
       POISKKINO_API_KEY: ${POISKKINO_API_KEY:-}
       # Сервис должен быть зарегистрирован в auth как клиент (справочно, не выполнять
       # отсюда — это делается один раз руками на реальном сервере):
-      #   docker compose exec auth node server.js client-add films "Что смотрим" https://movies.burninghouse.ru/
+      #   docker compose exec auth node server.js client-add movies "Что смотрим?" https://movies.burninghouse.ru/
       # Фронт и API на одном домене, CORS не нужен.
     ports:
       # Только на localhost — наружу отдаёт nginx на 443 (см. README.md).
       - "127.0.0.1:8792:8792"
     volumes:
-      - films-data:/app/data
+      - movies-data:/app/data
 
 volumes:
-  films-data:
+  movies-data:

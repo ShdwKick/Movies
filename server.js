@@ -25,7 +25,7 @@
  *   DATA_DIR       (по умолчанию ./data)    — store.db
  *   AUTH_ISSUER    ОБЯЗАТЕЛЬНО — адрес auth-сервиса, напр. https://auth.burninghouse.ru.
  *                  Он же claim iss внутри токенов: сверяется побайтово.
- *   AUTH_CLIENT_ID (по умолчанию films)     — идентификатор сервиса в auth
+ *   AUTH_CLIENT_ID (по умолчанию movies)    — идентификатор сервиса в auth
  *   AUTH_BASE      (по умолчанию = AUTH_ISSUER) — куда фронт уводит на вход. Отличается
  *                  от ISSUER только если сервер ходит в auth по внутреннему адресу.
  *   AUTH_JWKS_URL  (по умолчанию AUTH_ISSUER + /.well-known/jwks.json)
@@ -53,7 +53,7 @@ const APP_HTML = path.join(__dirname, "index.html");
 const ASSETS_DIR = path.join(__dirname, "assets");
 
 const AUTH_ISSUER = (process.env.AUTH_ISSUER || "").replace(/\/+$/, "");
-const AUTH_CLIENT_ID = process.env.AUTH_CLIENT_ID || "films";
+const AUTH_CLIENT_ID = process.env.AUTH_CLIENT_ID || "movies";
 const AUTH_BASE = (process.env.AUTH_BASE || AUTH_ISSUER).replace(/\/+$/, "");
 
 if (!AUTH_ISSUER) {
@@ -160,9 +160,11 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_marks_movie ON movie_marks(kinopoisk_id);
 
-  -- История розыгрышей. method — точка расширения: сегодня weighted_random и
-  -- wheel используют один и тот же взвешенный выбор (см. selection.js),
-  -- позже elimination/battle_royale подключаются новым значением method без
+  -- История розыгрышей. method — точка расширения: weighted_random и wheel
+  -- используют один и тот же взвешенный выбор, elimination — раундовое
+  -- выбывание (см. selection.js); result_kinopoisk_id один и тот же для
+  -- любого метода, rounds elimination тут не хранятся (только в HTTP-ответе,
+  -- для анимации), battle_royale подключается новым значением method без
   -- изменения схемы.
   CREATE TABLE IF NOT EXISTS selection_events (
     id                  TEXT PRIMARY KEY,
@@ -174,6 +176,18 @@ db.exec(`
     created_at          INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_draws_room ON selection_events(room_id);
+
+  -- Личный список «на просмотр» — глобально, без room_id: то же самое
+  -- намеренное решение, что и у movie_marks (см. выше) — но это не оценка и
+  -- не факт просмотра, а просто закладка «хочу посмотреть», независимая от
+  -- какой-либо комнаты.
+  CREATE TABLE IF NOT EXISTS personal_list (
+    user_id      TEXT NOT NULL,
+    kinopoisk_id INTEGER NOT NULL REFERENCES movies(kinopoisk_id),
+    added_at     INTEGER NOT NULL,
+    PRIMARY KEY (user_id, kinopoisk_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_personal_list_movie ON personal_list(kinopoisk_id);
 `);
 // Колонки, появившиеся позже своих таблиц: базы, созданные раньше, о них не
 // знают, а CREATE TABLE IF NOT EXISTS их не тронет. История «когда и кем этот
@@ -228,6 +242,9 @@ const stmt = {
   countOwners: db.prepare("SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND role = 'owner'"),
 
   movieByKpId: db.prepare("SELECT * FROM movies WHERE kinopoisk_id = ?"),
+  // Витрина «Из базы» на главной (см. GET /api/movies ниже) — просто самые
+  // недавно закэшированные фильмы, без какой-либо персонализации.
+  moviesLatest: db.prepare("SELECT * FROM movies ORDER BY cached_at DESC LIMIT ?"),
   // kinopoisk_id — PRIMARY KEY, поэтому кэш обновляется UPSERT'ом: один и тот
   // же фильм, найденный заново через /refresh, просто перезаписывает поля.
   upsertMovie: db.prepare(`
@@ -319,6 +336,21 @@ const stmt = {
      WHERE se.room_id = ?
      ORDER BY se.created_at DESC
      LIMIT 20`),
+
+  // Личный список на просмотр — глобально, без привязки к комнате (см. таблицу
+  // personal_list выше). INSERT идемпотентен: повторное добавление уже
+  // лежащего в списке фильма не должно падать ошибкой (план задачи).
+  personalListInsert: db.prepare(`
+    INSERT INTO personal_list (user_id, kinopoisk_id, added_at) VALUES (?,?,?)
+    ON CONFLICT(user_id, kinopoisk_id) DO NOTHING`),
+  personalListDelete: db.prepare("DELETE FROM personal_list WHERE user_id = ? AND kinopoisk_id = ?"),
+  // pl_-префикс — тот же приём, что rm_/mm_ у room_movies/movie_marks: не
+  // путать с одноимёнными столбцами movies при парсинге строки в moviePayload.
+  personalList: db.prepare(`
+    SELECT pl.added_at AS pl_added_at, mv.*
+      FROM personal_list pl JOIN movies mv ON mv.kinopoisk_id = pl.kinopoisk_id
+     WHERE pl.user_id = ?
+     ORDER BY pl.added_at DESC`),
 };
 
 // Обновление полей комнаты собирается динамически, как в Trip/server.js:290-295.
@@ -458,6 +490,23 @@ function upsertMovie(mapped) {
     mapped.director, JSON.stringify(mapped.actors), ts, ts
   );
   return stmt.movieByKpId.get(mapped.kinopoiskId);
+}
+
+/**
+ * Гарантирует, что фильм kpId есть в кэше movies и подробности (persons/
+ * premiere) подгружены — сеть трогаем, только если записи ещё нет ИЛИ
+ * detail_cached_at пуст (то же правило кэша, что раньше жило прямо в
+ * обработчике POST /rooms/:id/movies, и теперь общее для него и личного
+ * списка). Ошибку poiskkino.js бросает как есть — здесь нет `res`, чтобы
+ * превратить её в HTTP-ответ, это делает вызывающий код через poiskkinoError().
+ */
+async function ensureMovieCached(kpId) {
+  let movie = stmt.movieByKpId.get(kpId);
+  if (!movie || !movie.detail_cached_at) {
+    const raw = await poiskkino.getById(kpId);
+    movie = upsertMovie(mapMovie(raw));
+  }
+  return movie;
 }
 
 /** Строка movies (или movies-часть join'а с room_movies) → JSON для фронта. */
@@ -681,6 +730,19 @@ async function api(req, res, seg, user, query) {
     })) });
   }
 
+  // ── витрина «Из базы» на главной: последние закэшированные фильмы ─
+  // Обычная авторизация, без привязки к комнате — тот же глобальный кэш
+  // movies, что используют поиск/комнаты/личный список.
+  // TODO(будущее): рекомендации на основе movie_marks.score — не делаем сейчас.
+  if (seg.length === 2 && seg[1] === "movies") {
+    if (m !== "GET") return json(res, 405, { error: "method not allowed" });
+    let limit = parseInt(query.get("limit"), 10);
+    if (!Number.isFinite(limit) || limit <= 0) limit = 24;
+    limit = Math.min(limit, 60);
+    const rows = stmt.moviesLatest.all(limit);
+    return json(res, 200, { movies: rows.map(moviePayload) });
+  }
+
   // ── лента «Что мы смотрели» (мои просмотренные, глобально) ───
   if (seg.length === 2 && seg[1] === "watched") {
     if (m !== "GET") return json(res, 405, { error: "method not allowed" });
@@ -717,6 +779,38 @@ async function api(req, res, seg, user, query) {
       return json(res, 200, { mark: markPayload(stmt.markGet.get(user.id, kpId)) });
     }
     return json(res, 405, { error: "method not allowed" });
+  }
+
+  // ── личный список на просмотр (глобально, без привязки к комнате) ─
+  // Не проходит через access(roomId,...) намеренно — список не привязан ни к
+  // какой комнате, достаточно просто быть вошедшим пользователем.
+  if (seg.length === 2 && seg[1] === "my-list") {
+    if (m === "GET") {
+      const rows = stmt.personalList.all(user.id);
+      return json(res, 200, { movies: rows.map(r => ({
+        movie: moviePayload(r),
+        addedAt: r.pl_added_at,
+      })) });
+    }
+    if (m === "POST") {
+      const body = await readJson(req);
+      const kpId = parseInt(body.kinopoiskId, 10);
+      if (!Number.isFinite(kpId) || kpId <= 0) return json(res, 400, { error: "bad kinopoiskId" });
+      let movie;
+      try { movie = await ensureMovieCached(kpId); }
+      catch (e) { return poiskkinoError(res, e); }
+      stmt.personalListInsert.run(user.id, kpId, now());
+      return json(res, 200, { movie: moviePayload(movie) });
+    }
+    return json(res, 405, { error: "method not allowed" });
+  }
+
+  if (seg.length === 3 && seg[1] === "my-list") {
+    if (m !== "DELETE") return json(res, 405, { error: "method not allowed" });
+    const kpId = parseInt(seg[2], 10);
+    if (!Number.isFinite(kpId)) return json(res, 400, { error: "bad kinopoiskId" });
+    stmt.personalListDelete.run(user.id, kpId);
+    return json(res, 200, { ok: true });
   }
 
   // ── список комнат и создание ────────────────────────────────
@@ -836,16 +930,23 @@ async function api(req, res, seg, user, query) {
         kinopoiskId: r.kinopoisk_id, weight: r.weight || 1,
         title: r.title, year: r.year, posterUrl: r.poster_url,
       }));
-      const resultKinopoiskId = selection.METHODS[method](
+      // weighted_random/wheel возвращают голый kinopoiskId; elimination —
+      // {rounds, resultKinopoiskId} (rounds нужны только фронту для анимации
+      // выбывания по раундам, в БД не идут — схему selection_events это не
+      // меняет, см. selection.js).
+      const outcome = selection.METHODS[method](
         candidates.map(c => ({ kinopoiskId: c.kinopoiskId, weight: c.weight }))
       );
+      const isObjectOutcome = outcome && typeof outcome === "object";
+      const resultKinopoiskId = isObjectOutcome ? outcome.resultKinopoiskId : outcome;
+      const rounds = isObjectOutcome ? outcome.rounds : null;
       const eventId = uid();
       stmt.insertDraw.run(
         eventId, roomId, method,
         JSON.stringify(candidates.map(c => ({ kinopoiskId: c.kinopoiskId, weight: c.weight }))),
         resultKinopoiskId, user.id, now()
       );
-      return json(res, 200, { eventId, candidates, resultKinopoiskId });
+      return json(res, 200, { eventId, candidates, resultKinopoiskId, rounds });
     }
 
     // GET /rooms/:id/draws — история последних розыгрышей (недорого, не
@@ -894,13 +995,9 @@ async function api(req, res, seg, user, query) {
         const kpId = parseInt(body.kinopoiskId, 10);
         if (!Number.isFinite(kpId) || kpId <= 0) return json(res, 400, { error: "bad kinopoiskId" });
 
-        let movie = stmt.movieByKpId.get(kpId);
-        if (!movie || !movie.detail_cached_at) {
-          let raw;
-          try { raw = await poiskkino.getById(kpId); }
-          catch (e) { return poiskkinoError(res, e); }
-          movie = upsertMovie(mapMovie(raw));
-        }
+        let movie;
+        try { movie = await ensureMovieCached(kpId); }
+        catch (e) { return poiskkinoError(res, e); }
 
         const already = stmt.roomMovie.get(roomId, kpId);
         if (!already) stmt.insertRoomMovie.run(uid(), roomId, kpId, "queued", 1, user.id, now(), 0);

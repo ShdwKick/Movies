@@ -1,10 +1,10 @@
-name: bh-films
+name: bh-movies
 
 services:
-  films:
+  movies:
     build: .
-    image: shadowkick/films:latest
-    container_name: films
+    image: shadowkick/movies:latest
+    container_name: movies
     restart: unless-stopped
     environment:
       HOST: 0.0.0.0
@@ -13,7 +13,7 @@ services:
       # проверять токены нечем. Локально auth поднимается из своего репозитория
       # (docker-compose.dev.yml там поднимает и его, и потребителей разом).
       AUTH_ISSUER: http://localhost:8788
-      AUTH_CLIENT_ID: films
+      AUTH_CLIENT_ID: movies
       # Ключ poiskkino.dev — без него поиск и добавление новых фильмов не работают.
       POISKKINO_API_KEY: ${POISKKINO_API_KEY:-}
       # Если фронтенд когда-нибудь будет отдаваться с другого домена:
@@ -22,7 +22,7 @@ services:
       # По умолчанию слушаем только localhost — наружу отдаёт nginx (см. README.md).
       - "127.0.0.1:8792:8792"
     volumes:
-      - films-data:/app/data
+      - movies-data:/app/data
 
 volumes:
-  films-data:
+  movies-data:

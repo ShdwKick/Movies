@@ -1,0 +1,418 @@
+/* ===================== MD3 TOKENS =====================
+   Тот же фиолетовый seed, что и в остальных сервисах BurningHouse: интерфейс у
+   семьи общий, сервисы различаются цветом ПЛАМЕНИ, а не кнопок
+   (BurningHouse/Design/palette.md). Значения — дословно как в Trip/Финансы. */
+:root{
+  --md-sys-color-primary:#5b4fe0;
+  --md-sys-color-on-primary:#ffffff;
+  --md-sys-color-primary-container:#e4dfff;
+  --md-sys-color-on-primary-container:#180265;
+  --md-sys-color-secondary:#5d5b77;
+  --md-sys-color-on-secondary:#ffffff;
+  --md-sys-color-secondary-container:#e3e0f9;
+  --md-sys-color-on-secondary-container:#1a1836;
+  --md-sys-color-tertiary:#7c5295;
+  --md-sys-color-on-tertiary:#ffffff;
+  --md-sys-color-tertiary-container:#f6d9ff;
+  --md-sys-color-on-tertiary-container:#300945;
+  --md-sys-color-error:#ba1a1a;
+  --md-sys-color-on-error:#ffffff;
+  --md-sys-color-error-container:#ffdad6;
+  --md-sys-color-on-error-container:#410002;
+  --md-sys-color-surface:#fbf8ff;
+  --md-sys-color-on-surface:#1c1b20;
+  --md-sys-color-on-surface-variant:#46464f;
+  --md-sys-color-surface-container-lowest:#ffffff;
+  --md-sys-color-surface-container-low:#f5f2fa;
+  --md-sys-color-surface-container:#efecf4;
+  --md-sys-color-surface-container-high:#e9e6ee;
+  --md-sys-color-surface-container-highest:#e3e1e9;
+  --md-sys-color-outline:#777680;
+  --md-sys-color-outline-variant:#c7c5d0;
+  --md-sys-color-inverse-surface:#313036;
+  --md-sys-color-inverse-on-surface:#f4eff4;
+  --md-sys-color-inverse-primary:#c6bfff;
+  --md-ok:#2e6b3f;
+  --md-ok-container:#c6f0cf;
+  --md-warn:#8a5a00;
+  --md-warn-container:#ffddb0;
+
+  --md-sys-shape-corner-xs:4px;
+  --md-sys-shape-corner-s:8px;
+  --md-sys-shape-corner-m:12px;
+  --md-sys-shape-corner-l:16px;
+  --md-sys-shape-corner-xl:28px;
+  --md-sys-shape-corner-full:9999px;
+
+  --md-font:"Roboto Flex","Segoe UI",system-ui,Roboto,sans-serif;
+
+  --ease-emph:cubic-bezier(0.2,0,0,1);
+  --ease-emph-dec:cubic-bezier(0.05,0.7,0.1,1);
+  --ease-std:cubic-bezier(0.2,0,0,1);
+
+  --e1:0 1px 2px rgba(0,0,0,.05),0 2px 6px rgba(0,0,0,.06);
+  --e2:0 2px 6px rgba(0,0,0,.07),0 8px 20px rgba(0,0,0,.08);
+}
+[data-theme="dark"]{
+  --md-sys-color-primary:#c6bfff;
+  --md-sys-color-on-primary:#2e1591;
+  --md-sys-color-primary-container:#4335a8;
+  --md-sys-color-on-primary-container:#e4dfff;
+  --md-sys-color-secondary:#c7c4e0;
+  --md-sys-color-on-secondary:#2f2d45;
+  --md-sys-color-secondary-container:#45435c;
+  --md-sys-color-on-secondary-container:#e3e0f9;
+  --md-sys-color-tertiary:#e9b4ff;
+  --md-sys-color-on-tertiary:#46215b;
+  --md-sys-color-tertiary-container:#613876;
+  --md-sys-color-on-tertiary-container:#f6d9ff;
+  --md-sys-color-error:#ffb4ab;
+  --md-sys-color-on-error:#690005;
+  --md-sys-color-error-container:#93000a;
+  --md-sys-color-on-error-container:#ffdad6;
+  --md-sys-color-surface:#141318;
+  --md-sys-color-on-surface:#e5e1e9;
+  --md-sys-color-on-surface-variant:#c8c5d0;
+  --md-sys-color-surface-container-lowest:#0f0e13;
+  --md-sys-color-surface-container-low:#1c1b20;
+  --md-sys-color-surface-container:#201f25;
+  --md-sys-color-surface-container-high:#2b2930;
+  --md-sys-color-surface-container-highest:#36343b;
+  --md-sys-color-outline:#918f9a;
+  --md-sys-color-outline-variant:#46464f;
+  --md-sys-color-inverse-surface:#e5e1e9;
+  --md-sys-color-inverse-on-surface:#313036;
+  --md-sys-color-inverse-primary:#5b4fe0;
+  --md-ok:#8fd6a2;
+  --md-ok-container:#1d4a2c;
+  --md-warn:#ffb951;
+  --md-warn-container:#5c3f00;
+}
+
+/* ===================== BASE ===================== */
+:root{color-scheme:light dark}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+html{background:var(--md-sys-color-surface);transition:background-color .3s var(--ease-std)}
+body{
+  font:16px/1.5 var(--md-font);
+  color:var(--md-sys-color-on-surface);
+  background:transparent;
+  min-height:100%;
+  -webkit-font-smoothing:antialiased;
+}
+body.modal-open{overflow:hidden}
+/* Единственное место, где фон целой страницы красится пламенем: экран
+   «нужен вход» — брендовый момент, как и страница входа в auth
+   (см. BurningHouse/Design/palette.md, «фон входа» — допустимый акцент). */
+body.auth-bg{background:var(--dawn-1)}
+[data-theme="dark"] body.auth-bg{background:var(--night-1)}
+h1{font-size:1.3rem;font-weight:600;margin:1.5rem 0 .3rem}
+h2{font-size:1.05rem;font-weight:600;margin:1.6rem 0 .5rem}
+p{margin:.4rem 0}
+a{color:var(--md-sys-color-primary)}
+.spacer{flex:1}
+.muted{color:var(--md-sys-color-on-surface-variant);font-size:.85rem}
+.sub{margin-top:.25rem;font-size:.82rem}
+.hidden{display:none}
+[hidden]{display:none !important}
+
+.icon{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.icon.sm{width:20px;height:20px}
+.icon.xs{width:16px;height:16px}
+
+/* ===================== APP BAR ===================== */
+.appbar{
+  position:sticky;top:0;z-index:20;height:64px;
+  background:color-mix(in srgb,var(--md-sys-color-surface) 88%,transparent);
+  backdrop-filter:blur(12px);
+  box-shadow:0 1px 0 var(--md-sys-color-outline-variant);
+}
+.appbar-inner{max-width:1080px;margin:0 auto;height:100%;display:flex;align-items:center;gap:8px;padding:0 clamp(12px,4vw,24px)}
+.appbar .bh-lockup{font-size:15px}
+.appbar .bh-lockup .bh-mark{width:34px;height:34px}
+.appbar .bh-lockup:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:4px;border-radius:6px}
+.content{max-width:1080px;margin:0 auto;padding:8px clamp(12px,4vw,24px) 96px}
+
+/* ===================== КНОПКИ ===================== */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  height:40px;padding:0 18px;border:0;border-radius:var(--md-sys-shape-corner-full);
+  font:inherit;font-size:14px;font-weight:600;cursor:pointer;position:relative;overflow:hidden;
+  background:transparent;color:var(--md-sys-color-primary);text-decoration:none;white-space:nowrap;
+  transition:background .2s,box-shadow .2s;
+}
+.btn::after{content:"";position:absolute;inset:0;background:currentColor;opacity:0;transition:opacity .2s}
+.btn:hover::after{opacity:.08}
+.btn:active::after{opacity:.12}
+.btn.filled{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary);box-shadow:var(--e1)}
+.btn.tonal{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
+.btn.outlined{border:1px solid var(--md-sys-color-outline);color:var(--md-sys-color-on-surface-variant)}
+.btn.danger{color:var(--md-sys-color-error)}
+.btn.outlined.danger{border-color:color-mix(in srgb,var(--md-sys-color-error) 45%,var(--md-sys-color-outline))}
+.btn.filled.danger{background:var(--md-sys-color-error);color:var(--md-sys-color-on-error)}
+.btn.full{width:100%}
+.btn.sm{height:32px;padding:0 14px;font-size:12.5px}
+.btn:disabled{opacity:.5;cursor:default;pointer-events:none}
+
+.icon-btn{
+  position:relative;width:44px;height:44px;flex:none;padding:0;border-radius:var(--md-sys-shape-corner-full);
+  border:0;background:transparent;color:var(--md-sys-color-on-surface-variant);
+  cursor:pointer;display:grid;place-items:center;overflow:hidden;
+}
+.icon-btn::after{content:"";position:absolute;inset:0;background:currentColor;opacity:0;transition:opacity .2s}
+.icon-btn:hover::after{opacity:.08}
+.icon-btn:active::after{opacity:.12}
+.icon-btn.tonal{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
+.icon-btn.danger{color:var(--md-sys-color-error)}
+.icon-btn.xs{width:32px;height:32px}
+
+/* Переключатель метода розыгрыша — не действие, а тихий выбор одного из
+   вариантов, поэтому не соревнуется с доминирующей .btn.filled «Крутить» за
+   внимание: тот же компактный сегмент-таблетка .mini-seg, что и в
+   Trip/assets/styles.css (там — переключатель вида списка). */
+.mini-seg{display:inline-flex;background:var(--md-sys-color-surface-container);border-radius:var(--md-sys-shape-corner-full);padding:3px}
+.mini-seg button{
+  border:0;background:transparent;font:inherit;font-size:13px;font-weight:600;cursor:pointer;
+  color:var(--md-sys-color-on-surface-variant);padding:7px 15px;border-radius:var(--md-sys-shape-corner-full);
+  transition:background .18s,color .18s;
+}
+.mini-seg button.sel{background:var(--md-sys-color-surface-container-lowest);color:var(--md-sys-color-on-surface);box-shadow:var(--e1)}
+
+/* ===================== CHIP ===================== */
+.chip{
+  display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;
+  border-radius:var(--md-sys-shape-corner-s);font-size:12px;font-weight:600;
+  background:var(--md-sys-color-surface-container-high);color:var(--md-sys-color-on-surface-variant);
+}
+.chip.rating{background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container)}
+.chip.owner{background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container)}
+
+/* ===================== ФОРМЫ ===================== */
+input[type="text"]{
+  font:inherit;font-size:15px;padding:10px 14px;border-radius:var(--md-sys-shape-corner-s);
+  border:1px solid var(--md-sys-color-outline);background:transparent;color:var(--md-sys-color-on-surface);
+  width:100%;transition:border-color .15s,border-width .15s;
+}
+input[type="text"]:focus{outline:none;border-color:var(--md-sys-color-primary);border-width:1.5px}
+select{
+  font:inherit;font-size:14px;padding:9px 12px;border-radius:var(--md-sys-shape-corner-s);
+  border:1px solid var(--md-sys-color-outline);background:var(--md-sys-color-surface-container-lowest);
+  color:var(--md-sys-color-on-surface);cursor:pointer;color-scheme:light;
+}
+[data-theme="dark"] select{color-scheme:dark}
+.row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:1rem}
+.bar{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-top:1rem}
+
+/* ===================== ЭКРАН «НУЖЕН ВХОД» =====================
+   Показывается только когда увести на auth не получилось (см.
+   bh-no-service-login-page) — своей формы входа у сервиса нет. */
+.hero{max-width:32rem;margin:10vh auto 0;text-align:center;padding:2rem 1.75rem}
+.hero .lead{margin-top:.6rem;color:var(--md-sys-color-on-surface-variant);line-height:1.6}
+.hero-actions{margin-top:1.6rem;justify-content:center}
+
+/* ===================== КАРТОЧКИ КОМНАТ ===================== */
+.card{
+  position:relative;overflow:hidden;display:block;width:100%;
+  background:var(--md-sys-color-surface-container-lowest);
+  border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-l);
+  padding:16px;margin-top:10px;cursor:pointer;text-align:left;font:inherit;color:inherit;
+  box-shadow:var(--e1);transition:transform .18s var(--ease-emph),box-shadow .18s;
+  animation:rise .4s var(--ease-emph-dec) both;
+}
+.card:hover{transform:translateY(-2px);box-shadow:var(--e2)}
+.card::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
+  background:linear-gradient(to top,var(--flame-base),var(--flame-tip));opacity:.75;
+}
+.card .title{font-size:15.5px;font-weight:650}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}}
+
+/* ===================== КАРТОЧКИ ФИЛЬМОВ ===================== */
+/* Очередь/история/личный список/результаты поиска — один и тот же
+   визуальный язык: рамка, лёгкая тень, полоска пламени слева (как
+   .trip-card/.place в Trip), но без подъёма при наведении — карточка не
+   кликабельна целиком, действия внутри неё свои кнопки. */
+.movie-card{
+  position:relative;overflow:hidden;
+  background:var(--md-sys-color-surface-container-lowest);
+  border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-l);
+  padding:14px;margin-top:10px;
+  box-shadow:var(--e1);transition:box-shadow .18s,border-color .18s;
+}
+.movie-card:hover{box-shadow:var(--e2)}
+.movie-card::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
+  background:linear-gradient(to top,var(--flame-base),var(--flame-tip));opacity:.7;
+}
+.movie-card-head{display:flex;gap:.9rem}
+.movie-card .row{margin-top:.8rem}
+.movie-poster{
+  width:4.6rem;height:6.9rem;object-fit:cover;border-radius:var(--md-sys-shape-corner-s);flex:none;
+  background:var(--md-sys-color-surface-container-high);
+}
+.movie-info{flex:1;min-width:0}
+.movie-info .title{font-weight:650;font-size:15px}
+.chip-row{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.4rem}
+
+.movie-detail{margin-top:.6rem;font-size:.9rem}
+.movie-detail p{margin:.3rem 0}
+.movie-detail .movie-desc{color:var(--md-sys-color-on-surface-variant)}
+.movie-detail .movie-desc.has-sep{margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--md-sys-color-outline-variant)}
+
+/* «Подробнее» — компактная icon-btn со стрелкой вниз вместо текстовой кнопки
+   (см. bindMovieDetailToggle в app.js): стрелка переворачивается на 180° при
+   разворачивании блока. Общий свитч prefers-reduced-motion выше в файле
+   (transition-duration:.01ms !important) сам гасит анимацию, отдельная
+   медиа-запись тут не нужна. */
+.icon-btn .chevron{transition:transform .2s var(--ease-std)}
+.icon-btn.expanded .chevron{transform:rotate(180deg)}
+
+.score-row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:.7rem}
+.star-rating{display:inline-flex;gap:2px}
+.star-rating .star-btn{
+  padding:0;border-radius:var(--md-sys-shape-corner-xs);background:transparent;border:0;cursor:pointer;
+  color:var(--md-sys-color-outline-variant);font-size:1.3rem;line-height:1;
+  width:1.3em;height:1.3em;display:grid;place-items:center;transition:background .15s,color .15s;
+}
+.star-rating .star-btn.filled{color:var(--flame-tip)}
+.star-rating .star-btn:hover{background:var(--md-sys-color-surface-container)}
+
+/* ===================== ВИТРИНА «ИЗ БАЗЫ» (главная) =====================
+   Тот же паттерн сетки, что .trip-grid в Trip/assets/styles.css — карточки
+   переносятся по auto-fill, а не стоят одна под другой, как в остальных
+   списках .movie-card (там своя вертикальная лента, margin-top держит зазор
+   вместо grid-gap). */
+.movie-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));margin-top:10px}
+
+/* Компактная плитка витрины — только постер+название(+год), карточка
+   кликабельна целиком (та же кнопка-как-карточка идиома, что и .card у
+   комнат выше), в отличие от .movie-card результатов поиска, где действия —
+   отдельные кнопки внутри. Клик открывает #movieInfoModalBackdrop с полной
+   информацией (см. renderMovieTile/renderMovieInfoModal в app.js). */
+.movie-tile{
+  position:relative;overflow:hidden;display:flex;flex-direction:column;gap:.5rem;
+  background:var(--md-sys-color-surface-container-lowest);
+  border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-l);
+  padding:10px;cursor:pointer;text-align:left;font:inherit;color:inherit;width:100%;
+  box-shadow:var(--e1);transition:transform .18s var(--ease-emph),box-shadow .18s;
+  animation:rise .4s var(--ease-emph-dec) both;
+}
+.movie-tile:hover{transform:translateY(-2px);box-shadow:var(--e2)}
+.movie-tile .movie-poster{width:100%;height:auto;aspect-ratio:2/3}
+.movie-tile .title{font-weight:650;font-size:14px;line-height:1.25}
+.movie-tile .sub{margin-top:0}
+
+/* Постер побольше — для карточки фильма внутри #movieInfoModalBackdrop
+   (обычный .movie-poster в строке результата поиска мельче, тут модалка
+   заведомо просторнее). */
+.movie-poster.lg{width:7.2rem;height:10.8rem}
+
+/* ===================== TITLE ROW / МЕНЮ КОМНАТЫ ===================== */
+.backlink{font-size:.9rem;text-decoration:none;display:inline-block;margin-bottom:.4rem}
+.title-row{display:flex;justify-content:space-between;align-items:flex-start;gap:.6rem}
+.title-row h1{margin:1.5rem 0 .3rem}
+.menu-wrap{position:relative;flex:none;margin-top:1.1rem}
+.title-actions{display:flex;align-items:center;gap:.1rem;margin-top:1.1rem}
+.title-actions .menu-wrap{margin-top:0}
+.appbar-inner .menu-wrap{margin-top:0}
+
+.menu{
+  position:absolute;right:0;top:calc(100% + 6px);min-width:11.5rem;z-index:10;
+  background:var(--md-sys-color-surface-container-low);
+  border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-m);
+  box-shadow:var(--e2);overflow:hidden;padding:6px;
+}
+.menu-item{
+  display:block;width:100%;text-align:left;background:transparent;border:0;color:inherit;
+  font:inherit;font-weight:500;font-size:14px;padding:.6em .8em;border-radius:var(--md-sys-shape-corner-s);
+  cursor:pointer;
+}
+.menu-item:hover{background:var(--md-sys-color-surface-container)}
+.menu-item.danger{color:var(--md-sys-color-error)}
+.menu-item:disabled{opacity:.5;cursor:default;background:transparent}
+.menu-user{
+  padding:.5em .8em .6em;border-bottom:1px solid var(--md-sys-color-outline-variant);
+  margin-bottom:.3rem;display:flex;flex-direction:column;gap:.1rem;
+}
+.menu-user b{font-weight:650}
+
+/* ===================== МОДАЛКИ ===================== */
+.modal-backdrop{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.5);
+  display:flex;align-items:center;justify-content:center;padding:1.2rem}
+.modal-backdrop.hidden{display:none}
+.modal{
+  background:var(--md-sys-color-surface-container-low);
+  border-radius:var(--md-sys-shape-corner-xl);
+  width:100%;max-width:30rem;max-height:85vh;overflow:auto;
+  padding:1.1rem 1.3rem 1.3rem;box-shadow:var(--e2);
+  scrollbar-width:thin;scrollbar-color:var(--md-sys-color-outline-variant) transparent;
+}
+.modal-head{display:flex;justify-content:space-between;align-items:center;gap:.8rem}
+.modal-head h2{margin:0}
+
+ul.plain{list-style:none;margin:.6rem 0;padding:0}
+ul.plain li{display:flex;justify-content:space-between;align-items:center;gap:.6rem;
+  padding:.6em 0;border-bottom:1px solid var(--md-sys-color-outline-variant)}
+ul.plain li:last-child{border-bottom:0}
+
+/* ===================== КОД ПРИГЛАШЕНИЯ ===================== */
+.code-box{
+  display:flex;align-items:center;justify-content:center;gap:.6rem;flex-wrap:wrap;
+  margin:.5rem auto 0;width:fit-content;max-width:100%;text-align:center;
+  padding:.7em 1.2em;border-radius:var(--md-sys-shape-corner-m);
+  background:var(--md-sys-color-surface-container-low);
+  border:1px dashed color-mix(in srgb,var(--flame-tip) 45%,var(--md-sys-color-outline-variant));
+}
+.code-box code{
+  font-size:1.7rem;font-weight:700;letter-spacing:.06em;cursor:pointer;
+  font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+
+/* ===================== SNACKBAR ===================== */
+#snack{
+  position:fixed;left:50%;bottom:1.2rem;transform:translate(-50%,120%);
+  background:var(--md-sys-color-inverse-surface);color:var(--md-sys-color-inverse-on-surface);
+  padding:.7em 1.2em;border-radius:var(--md-sys-shape-corner-s);font-size:.9rem;
+  box-shadow:var(--e2);transition:transform .25s var(--ease-emph-dec);pointer-events:none;
+  max-width:90vw;text-align:center;
+}
+#snack.show{transform:translate(-50%,0)}
+@media(prefers-reduced-motion:reduce){#snack{transition:none}}
+
+/* ===================== РОЗЫГРЫШ ===================== */
+.draw-reel{display:flex;flex-direction:column;align-items:center;gap:.6rem;padding:1.4rem 0;text-align:center}
+.draw-reel .movie-poster{width:8rem;height:12rem}
+.draw-reel .title{font-weight:600}
+.wheel-wrap{position:relative;width:17rem;max-width:90vw;aspect-ratio:1;margin:1.4rem auto}
+.wheel-wrap svg{width:100%;height:100%;display:block;transition:transform 4.2s cubic-bezier(.12,.67,.14,1)}
+/* Гашение сектора выбывшего кандидата в раунде «На выбывание» — плавно, а не
+   рывком, см. animateElimination в app.js. */
+.wheel-wrap svg path{transition:opacity .3s var(--ease-std)}
+.wheel-wrap .sector-label{font-size:.62rem;font-weight:700;fill:#fff;text-anchor:middle;dominant-baseline:middle}
+.wheel-pointer{position:absolute;top:-.65rem;left:50%;transform:translateX(-50%);
+  width:0;height:0;border-left:.7rem solid transparent;border-right:.7rem solid transparent;
+  border-top:1.15rem solid var(--flame-tip);z-index:2;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}
+.wheel-legend{display:flex;flex-wrap:wrap;gap:.35rem .9rem;justify-content:center;margin-top:.9rem;font-size:.82rem}
+.wheel-legend .dot{display:inline-block;width:.7em;height:.7em;border-radius:99px;margin-right:.35em;vertical-align:middle}
+.result-card{margin-top:1rem;text-align:center}
+.result-card img{
+  width:9rem;height:13.5rem;object-fit:cover;border-radius:var(--md-sys-shape-corner-m);
+  background:var(--md-sys-color-surface-container-high);
+}
+.result-actions{justify-content:center}
+@media(prefers-reduced-motion:reduce){.wheel-wrap svg,.wheel-wrap svg path{transition:none}}
+
+/* ===================== ДОСТУПНОСТЬ ===================== */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+  }
+}
+:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}

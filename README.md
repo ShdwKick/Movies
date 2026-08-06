@@ -1,4 +1,4 @@
-# Что смотрим
+# Что смотрим?
 
 Компания друзей выбирает фильм на вечер, когда не может договориться:
 общий список кандидатов на комнату, случайный выбор (взвешенный рандом или
@@ -76,7 +76,7 @@ POISKKINO_API_KEY=ваш_ключ node dev.mjs
 | `HOST` | 127.0.0.1 | интерфейс (за nginx оставляем localhost) |
 | `DATA_DIR` | `./data` | `store.db` |
 | `AUTH_ISSUER` | — | **обязательна**; совпадает с `ISSUER` auth символ в символ |
-| `AUTH_CLIENT_ID` | `films` | идентификатор сервиса в auth |
+| `AUTH_CLIENT_ID` | `movies` | идентификатор сервиса в auth |
 | `AUTH_BASE` | `= AUTH_ISSUER` | куда фронт уводит на вход, если он отличается от внутреннего адреса |
 | `AUTH_JWKS_URL` | `AUTH_ISSUER/.well-known/jwks.json` | если auth виден серверу по другому адресу, чем браузеру |
 | `POISKKINO_API_KEY` | — | ключ poiskkino.dev; **без него поиск и добавление новых фильмов выключены** |
@@ -104,10 +104,10 @@ nginx: готовый конфиг — `deploy/nginx-movies-443.conf`, прок�
 - [ ] В настройках репозитория добавить секреты `DOCKERHUB_USERNAME` и
       `DOCKERHUB_TOKEN` (без них workflow `.github/workflows/deploy.yml` не
       сможет опубликовать образ)
-- [ ] Дождаться первой сборки — в Docker Hub должен появиться `shadowkick/films:latest`
+- [ ] Дождаться первой сборки — в Docker Hub должен появиться `shadowkick/movies:latest`
 - [ ] На реальном auth-сервере зарегистрировать клиента:
       ```bash
-      cd ~/auth && docker compose exec auth node server.js client-add films "Что смотрим" https://movies.burninghouse.ru/
+      cd ~/auth && docker compose exec auth node server.js client-add movies "Что смотрим?" https://movies.burninghouse.ru/
       ```
       `redirect_uri` сверяется побайтово — со слэшем на конце, ровно как здесь
 - [ ] На сервере рядом с `docker-compose.prod.yml` положить `.env` с ключом
@@ -124,9 +124,9 @@ nginx: готовый конфиг — `deploy/nginx-movies-443.conf`, прок�
       sudo nginx -t && sudo systemctl reload nginx
       ```
 - [ ] Скопировать `docker-compose.prod.yml` на сервер (как `docker-compose.yml`
-      в каталог сервиса, например `~/films/`) и поднять:
+      в каталог сервиса, например `~/movies/`) и поднять:
       ```bash
-      mkdir -p ~/films && cd ~/films
+      mkdir -p ~/movies && cd ~/movies
       # положить сюда docker-compose.prod.yml из репозитория как docker-compose.yml
       # и .env из шага выше
       docker compose up -d

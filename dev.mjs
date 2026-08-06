@@ -6,7 +6,7 @@
  *   node dev.mjs --reset    начать с чистых данных
  *
  * Что делает: заводит отдельные базы в .dev/, регистрирует в auth клиента
- * `films` с адресом возврата http://localhost:8791/, создаёт тестовый аккаунт
+ * `movies` с адресом возврата http://localhost:8791/, создаёт тестовый аккаунт
  * и запускает оба сервиса. Дальше открываете http://localhost:8791 и входите.
  *
  * Почему нельзя просто открыть index.html или отдать папку Live Server'ом:
@@ -28,12 +28,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawn } from "node:child_process";
 
-const FILMS_DIR = path.resolve(fileURLToPath(import.meta.url), "..");
-const AUTH_DIR = process.env.AUTH_DIR || path.join(FILMS_DIR, "..", "Auth");
-const WORK = path.join(FILMS_DIR, ".dev");
-const AUTH_PORT = 8788, FILMS_PORT = 8791;
+const MOVIES_DIR = path.resolve(fileURLToPath(import.meta.url), "..");
+const AUTH_DIR = process.env.AUTH_DIR || path.join(MOVIES_DIR, "..", "Auth");
+const WORK = path.join(MOVIES_DIR, ".dev");
+const AUTH_PORT = 8788, MOVIES_PORT = 8791;
 const AUTH = `http://localhost:${AUTH_PORT}`;
-const FILMS = `http://localhost:${FILMS_PORT}`;
+const MOVIES = `http://localhost:${MOVIES_PORT}`;
 const LOGIN = process.env.DEV_LOGIN || "dev";
 const PASSWORD = process.env.DEV_PASSWORD || "dev-parol-2026";
 
@@ -56,9 +56,9 @@ if (process.argv.includes("--reset")) {
   console.log("Данные .dev удалены — начинаем с нуля.\n");
 }
 fs.mkdirSync(path.join(WORK, "auth"), { recursive: true });
-fs.mkdirSync(path.join(WORK, "films"), { recursive: true });
+fs.mkdirSync(path.join(WORK, "movies"), { recursive: true });
 
-for (const [url, port] of [[AUTH, AUTH_PORT], [FILMS, FILMS_PORT]]) {
+for (const [url, port] of [[AUTH, AUTH_PORT], [MOVIES, MOVIES_PORT]]) {
   try {
     await fetch(url + "/api/health", { signal: AbortSignal.timeout(700) });
     console.error(`Порт ${port} уже занят — остановите тот процесс и повторите.`);
@@ -75,7 +75,7 @@ function authCli(...args) {
     return String(e.stdout || "") + String(e.stderr || "");   // «логин занят» — не ошибка, повторный запуск это норма
   }
 }
-authCli("client-add", "films", "Что смотрим", FILMS + "/");
+authCli("client-add", "movies", "Что смотрим?", MOVIES + "/");
 authCli("adduser", LOGIN, PASSWORD);
 
 /* ---------- запуск ---------- */
@@ -109,15 +109,15 @@ start("auth", AUTH_DIR, {
   DEV: "1",                    // без этого кука сессии не переживёт http:// — см. шапку файла
   ISSUER: AUTH, PORT: String(AUTH_PORT), HOST: "127.0.0.1",
 }, "\x1b[33m");
-start("films", FILMS_DIR, {
+start("movies", MOVIES_DIR, {
   ...process.env,
-  DATA_DIR: path.join(WORK, "films"),
-  PORT: String(FILMS_PORT), HOST: "127.0.0.1",
-  AUTH_ISSUER: AUTH, AUTH_CLIENT_ID: "films",
+  DATA_DIR: path.join(WORK, "movies"),
+  PORT: String(MOVIES_PORT), HOST: "127.0.0.1",
+  AUTH_ISSUER: AUTH, AUTH_CLIENT_ID: "movies",
 }, "\x1b[35m");
 
 console.log(`
-  Открывайте:  ${FILMS}
+  Открывайте:  ${MOVIES}
   Аккаунт:     ${LOGIN} / ${PASSWORD}
 
   Второго участника (проверить приглашение) заводят так же — на странице входа
