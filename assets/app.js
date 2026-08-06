@@ -31,7 +31,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 // Единственное место, где собирается ссылка на kinopoisk.cx — сервис видео не
 // хранит и не раздаёт, только переиспользует уже известный по /film/<id>/ путь
 // kinopoisk.ru (см. план).
-const kinopoiskCxUrl = (kinopoiskId) => `https://kinopoisk.cx/film/${kinopoiskId}/`;
+const kinopoiskCxUrl = (kinopoiskId) => `https://www.kinopoisk.cx/film/${kinopoiskId}/`;
 
 let auth = null;
 let state = {
