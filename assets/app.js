@@ -298,7 +298,9 @@ function renderMovieInfoModal(mv, rooms) {
       </div>
     </div>
     <div class="movie-detail"></div>
-    <div class="row" id="movieInfoModalActions"></div>`;
+    <div class="row">
+      <button class="btn outlined" id="movieInfoWatchBtn">Смотреть</button>
+    </div>`;
 
   const roles = [];
   if (mv.director) roles.push(`<p><b>Режиссёр:</b> ${esc(mv.director)}</p>`);
@@ -308,7 +310,15 @@ function renderMovieInfoModal(mv, rooms) {
     : "";
   body.querySelector(".movie-detail").innerHTML = roles.join("") + desc || '<p class="muted">Подробностей нет.</p>';
 
-  renderAddTargetActions(body.querySelector("#movieInfoModalActions"), mv.kinopoiskId, rooms);
+  // Кнопки добавления — тем же компактным меню «Добавить в…», что и на
+  // плитке витрины (renderAddToMenu), но в шапке модалки рядом с крестиком
+  // закрытия, а не бейджем поверх постера: постер тут узкий и лежит слева в
+  // .movie-card-head (не на всю ширину, как у плитки), поэтому бейджу над
+  // ним просто некуда раскрыть .menu, не вылезая за левый край окна.
+  const menuWrapBox = $("movieInfoModalMenuWrap");
+  menuWrapBox.textContent = "";
+  menuWrapBox.append(renderAddToMenu(mv.kinopoiskId, rooms));
+  body.querySelector("#movieInfoWatchBtn").onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
 }
 
 function renderRooms() {
@@ -850,24 +860,12 @@ function renderHistoryCard(rm, room, members) {
   card.innerHTML = `
     <div class="history-body">
       <div class="history-main">
-        <div class="title-row">
-          <div class="movie-card-head">
-            ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
-            <div class="movie-info">
-              <div class="title">${esc(mv.title)}${esc(year)}</div>
-              <div class="chip-row">${movieChipsHtml(mv)}</div>
-              <div class="muted sub">Просмотрено ${esc(whenText)} · ${esc(whoText)}</div>
-            </div>
-          </div>
-          <div class="title-actions">
-            <div class="menu-wrap">
-              <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Действия с фильмом" aria-label="Действия с фильмом" aria-haspopup="true" aria-expanded="false">
-                <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
-              </button>
-              <div class="menu" data-act="cardMenu" hidden>
-                <button class="menu-item" data-act="watched">Вернуть в очередь</button>
-              </div>
-            </div>
+        <div class="movie-card-head">
+          ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
+          <div class="movie-info">
+            <div class="title">${esc(mv.title)}${esc(year)}</div>
+            <div class="chip-row">${movieChipsHtml(mv)}</div>
+            <div class="muted sub">Просмотрено ${esc(whenText)} · ${esc(whoText)}</div>
           </div>
         </div>
         <div class="score-row">
@@ -876,6 +874,16 @@ function renderHistoryCard(rm, room, members) {
         </div>
       </div>
       ${mv.description ? `<div class="history-desc"><p class="movie-desc-preview">${esc(mv.description)}</p></div>` : ""}
+      <div class="history-menu">
+        <div class="menu-wrap">
+          <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Действия с фильмом" aria-label="Действия с фильмом" aria-haspopup="true" aria-expanded="false">
+            <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
+          </button>
+          <div class="menu" data-act="cardMenu" hidden>
+            <button class="menu-item" data-act="watched">Вернуть в очередь</button>
+          </div>
+        </div>
+      </div>
     </div>`;
 
   bindMovieCardMenu(card);

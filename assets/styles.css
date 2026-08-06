@@ -348,6 +348,13 @@ select{
 .history-body{display:flex;gap:1.2rem;align-items:flex-start}
 .history-main{flex:1 1 55%;min-width:0}
 .history-desc{flex:1 1 45%;min-width:0}
+/* Меню «…» — третий flex-элемент, справа от колонки с описанием (а не в
+   середине карточки на стыке колонок, как было раньше) — пользователь явно
+   попросил именно так. .menu-wrap по умолчанию несёт margin-top:1.1rem,
+   рассчитанный на контекст .title-row — тут сбрасываем, чтобы иконка встала
+   вровень с верхним краем постера/описания. */
+.history-menu{flex:none}
+.history-menu .menu-wrap{margin-top:0}
 /* -webkit-line-clamp — стандартный кросс-браузерный приём многострочного
    обрезания текста (Chrome/Edge/большинство браузеров), без него текст
    просто был бы длиннее по высоте, чем левая колонка. Строк больше, чем в
@@ -363,6 +370,12 @@ select{
 @media(max-width:36rem){
   .history-body{flex-direction:column;gap:.6rem}
   .history-desc .movie-desc-preview{-webkit-line-clamp:3}
+  /* В колонку меню вставать в конец потока не должно — уводим его в угол
+     карточки abs-позиционированием (.movie-card уже position:relative).
+     padding-right у .history-main — чтобы длинное название не заезжало под
+     иконку. */
+  .history-menu{position:absolute;top:14px;right:14px}
+  .history-main{padding-right:2rem}
 }
 
 /* «Подробнее» — компактная icon-btn со стрелкой вниз вместо текстовой кнопки
@@ -449,6 +462,17 @@ select{
    (обычный .movie-poster в строке результата поиска мельче, тут модалка
    заведомо просторнее). */
 .movie-poster.lg{width:7.2rem;height:10.8rem}
+
+/* Шапка модалки «Фильм» — меню «Добавить в…» (renderAddToMenu) встаёт
+   рядом с крестиком закрытия, а не бейджем поверх постера: постер тут узкий
+   и лежит слева в .movie-card-head (не на всю ширину, как у плитки
+   витрины), так что бейджу над ним было бы некуда раскрыть .menu, не вылезая
+   за левый край окна — а в шапке, у самого правого края модалки, .menu
+   (right:0 по умолчанию) и так раскрывается штатно, без переопределений.
+   #movieInfoModalMenuWrap в разметке — просто пустой контейнер, сам
+   .menu-wrap каждый раз перевставляется заново в renderMovieInfoModal. */
+.modal-head-actions{display:flex;align-items:center;gap:.1rem}
+.modal-head-actions .menu-wrap{margin-top:0}
 
 /* ===================== TITLE ROW / МЕНЮ КОМНАТЫ ===================== */
 .backlink{font-size:.9rem;text-decoration:none;display:inline-block;margin-bottom:.4rem}
