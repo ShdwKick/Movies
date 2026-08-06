@@ -203,12 +203,14 @@ async function showRooms() {
   renderCachedMovies(state.rooms);
 }
 
-/** Витрина «Из базы» — последние закэшированные фильмы (GET /api/movies).
-    Раньше тут стояла полноразмерная карточка результата поиска — слишком
-    тяжело для главной; теперь компактная плитка (renderMovieTile), клик по
-    которой открывает #movieInfoModalBackdrop с теми же данными (moviePayload
-    уже полный, повторный запрос к сети не нужен). Секция скрыта целиком, пока
-    кэш пуст — план явно требует не показывать пустой блок с заголовком в никуда. */
+/** Витрина закэшированных фильмов (GET /api/movies), без текстового
+    заголовка — только визуальный разделитель (#cachedMoviesWrap в
+    styles.css). TODO(будущее): разделение витрины по жанрам. Раньше тут
+    стояла полноразмерная карточка результата поиска — слишком тяжело для
+    главной; теперь компактная плитка (renderMovieTile), клик по которой
+    открывает #movieInfoModalBackdrop с теми же данными (moviePayload уже
+    полный, повторный запрос к сети не нужен). Секция скрыта целиком, пока
+    кэш пуст — план явно требует не показывать пустой блок. */
 async function renderCachedMovies(rooms) {
   const data = await act(() => api("/movies?limit=24"));
   const wrap = $("cachedMoviesWrap");
@@ -216,24 +218,60 @@ async function renderCachedMovies(rooms) {
   wrap.hidden = false;
   const box = $("cachedMoviesList");
   box.textContent = "";
+  openCardMenu = null; // старые плитки со своими меню-«…» уходят целиком
   for (const mv of data.movies) box.append(renderMovieTile(mv, rooms));
 }
 
-/** Компактная плитка витрины — постер+название(+год мелким текстом),
-    кликабельна целиком (как .card у комнат: сам <button> — контейнер, без
-    отдельной текст-ссылки внутри). rooms нужен только чтобы передать его
-    дальше в модалку — сама плитка их не показывает. */
+// Иконка «Смотреть» на плитке витрины — тот же плей-треугольник, что и
+// текстовая кнопка «Смотреть» карточки очереди (renderMovieCard), просто в
+// виде компактной icon-btn.xs: там место для текста есть, тут нет.
+const PLAY_ICON = '<svg class="icon" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8V4z"/></svg>';
+
+/** Компактная плитка витрины — постер (с меню «Добавить в…», renderAddToMenu,
+    бейджем в правом верхнем углу поверх обложки) и строка название/год с
+    кнопкой «Смотреть» (kinopoiskCxUrl в новой вкладке) у правого края той же
+    строки. Клик по САМОЙ плитке (не по вложенным кнопкам) по-прежнему
+    открывает #movieInfoModalBackdrop. tile больше не <button> (внутри свои
+    кнопки — <button> в <button> невалиден) — div[role=button][tabindex=0] со
+    своим keydown на Enter/Space, тот же приём, что у .movie-card-pick
+    (renderMovieResultCard). */
 function renderMovieTile(mv, rooms) {
-  const tile = el("button", "movie-tile");
-  tile.type = "button";
+  const tile = el("div", "movie-tile");
+  tile.setAttribute("role", "button");
+  tile.tabIndex = 0;
   tile.innerHTML = `
-    ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
-    <div class="title">${esc(mv.title)}</div>
-    ${mv.year ? `<div class="muted sub">${esc(mv.year)}</div>` : ""}`;
-  tile.onclick = () => {
+    <div class="movie-tile-poster-wrap">
+      ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
+    </div>
+    <div class="movie-tile-title-row">
+      <div class="movie-tile-title-col">
+        <div class="title">${esc(mv.title)}</div>
+        ${mv.year ? `<div class="muted sub">${esc(mv.year)}</div>` : ""}
+      </div>
+    </div>`;
+
+  const openInfo = () => {
     renderMovieInfoModal(mv, rooms);
     openModal("movieInfoModalBackdrop");
   };
+  tile.onclick = openInfo;
+  tile.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openInfo(); }
+  });
+
+  // Меню «Добавить в…» — бейджем поверх обложки (см. .movie-tile-poster-wrap
+  // .menu-wrap в styles.css), renderAddToMenu уже гасит клики stopPropagation
+  // на всей обёртке — своего обработчика тут не нужно.
+  tile.querySelector(".movie-tile-poster-wrap").append(renderAddToMenu(mv.kinopoiskId, rooms));
+
+  const watchBtn = el("button", "icon-btn xs");
+  watchBtn.type = "button";
+  watchBtn.title = "Смотреть";
+  watchBtn.setAttribute("aria-label", "Смотреть");
+  watchBtn.innerHTML = PLAY_ICON;
+  watchBtn.onclick = e => { e.stopPropagation(); window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener"); };
+  tile.querySelector(".movie-tile-title-row").append(watchBtn);
+
   return tile;
 }
 
@@ -244,8 +282,9 @@ function renderMovieTile(mv, rooms) {
     уже на клиенте; режиссёр/актёры/описание — тот же формат, что и
     «Подробнее» у карточки очереди/истории (bindMovieDetailToggle), но без
     сворачивания — тут это и есть весь контент модалки. Блок действий —
-    переиспользованный renderAddTargetActions (тот же компонент, что и в
-    строке результата поиска), не копипаста. */
+    переиспользованный renderAddTargetActions (тот же компонент, что
+    появляется по клику «Добавить в…» в компактных меню, см. renderAddToMenu),
+    не копипаста. */
 function renderMovieInfoModal(mv, rooms) {
   const year = mv.year ? ` (${mv.year})` : "";
   $("movieInfoModalTitle").textContent = `${mv.title}${year}`;
@@ -374,9 +413,10 @@ $("movieSearchBtn").onclick = runMovieSearch;
 $("movieSearchInput").addEventListener("keydown", e => { if (e.key === "Enter") runMovieSearch(); });
 
 /** Общая часть карточки результата поиска — постер+название+чипы, без
-    кнопок действий: те разные в комнатной модалке «Добавить фильм» (одна
-    кнопка «Добавить» — комната уже известна) и в глобальной модалке поиска
-    (выбор комнаты + «В личный список», см. renderSearchResultRow ниже). */
+    кнопок действий: те разные в комнатной модалке «Добавить фильм» (клик по
+    всей карточке добавляет — комната уже известна) и в глобальной модалке
+    поиска (стрелка «Подробнее» + меню «Добавить в…», см. renderSearchResultRow
+    ниже — там цель заранее не известна). */
 function renderMovieResultRow(mv) {
   const row = el("div", "movie-card-head");
   const year = mv.year ? ` (${mv.year})` : "";
@@ -397,9 +437,9 @@ function renderMovieResultRow(mv) {
     «Подробнее» (bindMovieDetailToggle), а <button> внутри <button> невалиден
     — поэтому div с role="button"/tabindex + свой keydown на Enter/Space.
     renderMovieResultRow — общая шапка (постер+инфо), её не трогаем: тот же
-    компонент используют результаты ГЛОБАЛЬНОГО поиска (renderSearchResultRow),
-    у которых кликабельности и стрелки-подробностей нет и не будет — там
-    выбор комнаты через <select> остаётся как есть. */
+    компонент используют результаты ГЛОБАЛЬНОГО поиска (renderSearchResultRow)
+    — у них тоже есть своя стрелка «Подробнее», но вся строка НЕ кликабельна
+    (цель добавления заранее не известна, там только меню «Добавить в…»). */
 function renderMovieResultCard(mv) {
   const card = el("div", "movie-card movie-card-pick");
   card.setAttribute("role", "button");
@@ -443,10 +483,11 @@ function renderMovieResults(movies) {
 /** Переиспользуемый блок «добавить в комнату»: <select> со списком комнат
     пользователя + кнопка, либо подсказка «Сначала создайте комнату», если
     комнат нет вовсе (см. план задачи 2). Один и тот же компонент используется
-    и в строке результата глобального поиска (renderSearchResultRow), и в
-    мини-пикере комнаты из личного списка (openRoomPicker). onAdded(roomId)
-    зовётся ПОСЛЕ успешного добавления — вызывающий код решает, закрывать ли
-    модалку и как известить пользователя. */
+    в мини-пикере комнаты из личного списка (openRoomPicker), в
+    renderAddTargetActions (модалка «Фильм», строка результата глобального
+    поиска через renderAddToMenu) и в самом renderAddToMenu (плитка витрины).
+    onAdded(roomId) зовётся ПОСЛЕ успешного добавления — вызывающий код
+    решает, закрывать ли модалку и как известить пользователя. */
 function renderRoomPicker(container, kinopoiskId, rooms, onAdded) {
   container.textContent = "";
   if (!rooms.length) {
@@ -469,9 +510,11 @@ function renderRoomPicker(container, kinopoiskId, rooms, onAdded) {
 }
 
 /** Блок выбора цели — renderRoomPicker + отдельная кнопка «В личный список»
-    (POST /my-list). Общий компонент для строки результата глобального поиска
-    (renderSearchResultRow) и блока действий в модалке «Фильм»
-    (renderMovieInfoModal) — вызывается, а не копируется. */
+    (POST /my-list). ВСЕГДА-видимый блок, уместен там, где место не жалко:
+    блок действий в модалке «Фильм» (renderMovieInfoModal) и содержимое
+    меню «Добавить в…» после раскрытия (renderAddToMenu, для плитки витрины
+    и строки результата глобального поиска — там сам блок под меню, см.
+    ниже). */
 function renderAddTargetActions(container, kinopoiskId, rooms) {
   renderRoomPicker(container, kinopoiskId, rooms);
   const listBtn = el("button", "btn tonal sm", "В личный список");
@@ -482,14 +525,30 @@ function renderAddTargetActions(container, kinopoiskId, rooms) {
 }
 
 /** Строка результата глобального поиска (шапка, любая комната) — та же
-    строка постер+инфо, что и в комнатной модалке, плюс блок выбора цели
-    (renderAddTargetActions). */
+    шапка постер+инфо, что и у карточки локального поиска
+    (renderMovieResultRow), плюс своя стрелка «Подробнее»
+    (bindMovieDetailToggle) и компактное меню «Добавить в…»
+    (renderAddToMenu) — комната заранее не известна, поэтому вся строка НЕ
+    кликабельна целиком (в отличие от renderMovieResultCard): добавление
+    только через меню, где нужно выбрать цель. */
 function renderSearchResultRow(mv, rooms) {
   const wrap = el("div", "movie-card");
-  wrap.append(renderMovieResultRow(mv));
-  const actions = el("div", "row");
-  renderAddTargetActions(actions, mv.kinopoiskId, rooms);
-  wrap.append(actions);
+  const head = renderMovieResultRow(mv);
+
+  const moreBtn = el("button", "icon-btn xs");
+  moreBtn.type = "button";
+  moreBtn.dataset.act = "more";
+  moreBtn.title = "Подробнее";
+  moreBtn.setAttribute("aria-label", "Подробнее");
+  moreBtn.setAttribute("aria-expanded", "false");
+  moreBtn.innerHTML = CHEVRON_DOWN_ICON;
+
+  const headActions = el("div", "movie-card-head-actions");
+  headActions.append(moreBtn, renderAddToMenu(mv.kinopoiskId, rooms));
+  head.append(headActions);
+
+  wrap.append(head, el("div", "movie-detail hidden"));
+  bindMovieDetailToggle(wrap, mv);
   return wrap;
 }
 
@@ -532,33 +591,46 @@ function renderStarRating(container, kinopoiskId, currentScore, onRated) {
   let score = currentScore || 0;
   const stars = [];
   const paint = upTo => stars.forEach((b, i) => b.classList.toggle("filled", i < upTo));
+  // Число справа от звёзд: постоянно видимая цифра текущей оценки — не
+  // только тултип на звезде. При наведении/фокусе показывает наведённое
+  // значение (живой предпросмотр в паре с paint), при уходе курсора и
+  // после клика откатывается/обновляется на реально сохранённый score.
+  const scoreLabel = el("span", "star-rating-score muted");
+  const paintScore = n => { scoreLabel.textContent = n ? String(n) : ""; };
   for (let i = 1; i <= 10; i++) {
     const btn = el("button", "star-btn", "★");
     btn.type = "button";
     btn.title = String(i);
     btn.setAttribute("aria-label", `Оценка ${i} из 10`);
-    btn.onmouseenter = () => paint(i);
-    btn.onfocus = () => paint(i);
+    btn.onmouseenter = () => { paint(i); paintScore(i); };
+    btn.onfocus = () => { paint(i); paintScore(i); };
     btn.onclick = () => act(async () => {
       const clear = score === i;
       if (clear) await api(`/movies/${kinopoiskId}/rating`, { method: "DELETE" });
       else await api(`/movies/${kinopoiskId}/rating`, { method: "PUT", body: { score: i } });
       score = clear ? 0 : i;
       paint(score);
+      paintScore(score);
       if (onRated) onRated(score || null);
     }, score === i ? "Оценка снята" : "Оценка сохранена");
     stars.push(btn);
     container.append(btn);
   }
-  container.onmouseleave = () => paint(score);
+  container.onmouseleave = () => { paint(score); paintScore(score); };
   paint(score);
+  paintScore(score);
+  container.append(scoreLabel);
 }
 
 /** «Подробнее» — раскрывающийся блок с режиссёром/актёрами/описанием, общий
-    для карточки очереди и карточки истории. Кнопка — компактная иконка-шеврон
-    (не текстовая .btn, см. план задачи 2): переворачивается на 180° при
-    разворачивании, .icon-btn.expanded .chevron{transform:rotate(180deg)} в
-    styles.css; общий свитч prefers-reduced-motion там же гасит анимацию. */
+    для карточки очереди (renderMovieCard) и карточки результата поиска
+    (renderMovieResultCard). У карточки ИСТОРИИ (renderHistoryCard) стрелки и
+    разворота больше нет — там короткое описание показано в теле карточки
+    всегда, см. .movie-desc-preview в styles.css и план задачи «карточки
+    истории». Кнопка — компактная иконка-шеврон (не текстовая .btn, см. план
+    задачи 2): переворачивается на 180° при разворачивании,
+    .icon-btn.expanded .chevron{transform:rotate(180deg)} в styles.css;
+    общий свитч prefers-reduced-motion там же гасит анимацию. */
 function bindMovieDetailToggle(card, mv) {
   const btn = card.querySelector('[data-act="more"]');
   btn.onclick = e => {
@@ -576,31 +648,62 @@ function bindMovieDetailToggle(card, mv) {
     // Очередь — сетка .queue-grid: .expanded на самой карточке растягивает
     // её на всю ширину ряда (grid-column:1/-1 в styles.css), соседние
     // карточки сами переставляются грид-раскладкой, без JS-пересчёта. Вне
-    // .queue-grid (история и другие списки, тоже через bindMovieDetailToggle)
-    // класс ни на что не влияет — там такого CSS-правила нет.
+    // .queue-grid (карточка результата поиска, тоже через
+    // bindMovieDetailToggle) класс ни на что не влияет — там такого CSS-
+    // правила нет.
     card.classList.toggle("expanded", willShow);
     const label = willShow ? "Свернуть" : "Подробнее";
     btn.title = label;
     btn.setAttribute("aria-label", label);
     if (willShow) {
-      const roles = [];
-      if (mv.director) roles.push(`<p><b>Режиссёр:</b> ${esc(mv.director)}</p>`);
-      if (mv.actors.length) roles.push(`<p><b>В ролях:</b> ${esc(mv.actors.join(", "))}</p>`);
-      const desc = mv.description
-        ? `<p class="movie-desc${roles.length ? " has-sep" : ""}">${esc(mv.description)}</p>`
-        : "";
-      box.innerHTML = roles.join("") + desc || '<p class="muted">Подробностей нет.</p>';
+      renderMovieDetail(box, mv);
     }
   };
 }
 
+/** Рисует режиссёра/актёров/описание в уже раскрытый .movie-detail. Если у mv
+    ещё нет ни одного из этих полей — результат /api/search (в отличие от
+    закэшированной карточки moviePayload там их вовсе нет, не пустой массив, а
+    undefined) — сначала подгружает полную карточку через GET /api/movies/:id
+    (тот же ensureMovieCached, что и добавление в комнату/личный список, так
+    что заодно и кэшируется на сервере), пишет результат прямо в mv, чтобы
+    повторное раскрытие этой же карточки в текущей сессии фронта уже не ходило
+    в сеть — и только потом рендерит. */
+async function renderMovieDetail(box, mv) {
+  const hasSomething = mv.director || (mv.actors && mv.actors.length) || mv.description;
+  if (!hasSomething && !mv.__detailsLoaded) {
+    box.innerHTML = '<div class="detail-spinner" aria-label="Загрузка…"></div>';
+    try {
+      const data = await api(`/movies/${mv.kinopoiskId}`);
+      Object.assign(mv, data);
+      mv.__detailsLoaded = true;
+    } catch {
+      // Свернули, пока запрос летел — карточка уже не наша, сообщение об
+      // ошибке в чужой (или снова свёрнутый) блок совать незачем.
+      if (!box.classList.contains("hidden")) box.innerHTML = '<p class="muted">Не удалось загрузить подробности.</p>';
+      return;
+    }
+    // Пользователь мог успеть свернуть блок, пока летел запрос — не подсовываем
+    // содержимое в уже скрытый .movie-detail.
+    if (box.classList.contains("hidden")) return;
+  }
+  const roles = [];
+  if (mv.director) roles.push(`<p><b>Режиссёр:</b> ${esc(mv.director)}</p>`);
+  if (mv.actors && mv.actors.length) roles.push(`<p><b>В ролях:</b> ${esc(mv.actors.join(", "))}</p>`);
+  const desc = mv.description
+    ? `<p class="movie-desc${roles.length ? " has-sep" : ""}">${esc(mv.description)}</p>`
+    : "";
+  box.innerHTML = (roles.join("") + desc) || '<p class="muted">Подробностей нет.</p>';
+}
+
 const CHEVRON_DOWN_ICON = '<svg class="icon chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
 
-// Меню действий карточки очереди (три точки в правом верхнем углу) —
-// «Отметить просмотренным»/«Убрать из комнаты» переехали сюда из отдельных
-// текстовых кнопок в ряд (см. план задачи «сетка очереди»). В отличие от
+// Меню действий карточки очереди/истории (три точки в правом верхнем углу) —
+// «Отметить просмотренным»/«Убрать из комнаты» (очередь) и «Вернуть в
+// очередь» (история) переехали сюда из отдельных кнопок (см. планы задач
+// «сетка очереди» и «карточки истории»). В отличие от
 // roomMenu/csvMenu/accountMenu — по одному фиксированному id на всю
-// страницу — карточек в очереди может быть много, и у каждой своё меню.
+// страницу — карточек в списках может быть много, и у каждой своё меню.
 // Вместо N независимых обработчиков document-клика держим одно
 // module-level «какое меню сейчас открыто» и подключаем его к тому же
 // общему закрытию (Escape/клик снаружи/открытие другого меню), что и три
@@ -635,6 +738,39 @@ document.addEventListener("click", e => {
   const { menu, btn } = openCardMenu;
   if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) closeCardMenu();
 });
+
+/** Меню «Добавить в…» — компактная замена ВСЕГДА-видимого renderAddTargetActions
+    для мест, где место ЖАЛКО (узкая плитка/список результатов): плитка
+    витрины (renderMovieTile) и строка результата глобального поиска
+    (renderSearchResultRow). Кнопка-триггер
+    (три точки) + .menu с ОДНИМ пунктом «Добавить в…» — тот же разметочный
+    паттерн (data-act="cardMenuBtn"/"cardMenu"), что и меню действий карточки
+    очереди/истории выше, поэтому открытие/закрытие переиспользует ТОТ ЖЕ
+    механизм (bindMovieCardMenu/closeCardMenu/module-level openCardMenu) — не
+    отдельный третий. Клик по пункту «Добавить в…» меню НЕ закрывает, а
+    подменяет содержимое того же .menu на renderAddTargetActions (select
+    комнат + «В личный список»). wrap.onclick(stopPropagation) — чтобы клики
+    внутри меню (включая уже подставленный renderAddTargetActions) не
+    всплывали до кликабельных родителей (плитка витрины целиком открывает
+    модалку по клику). */
+function renderAddToMenu(kinopoiskId, rooms) {
+  const wrap = el("div", "menu-wrap");
+  wrap.innerHTML = `
+    <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Добавить в…" aria-label="Добавить в…" aria-haspopup="true" aria-expanded="false">
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
+    </button>
+    <div class="menu" data-act="cardMenu" hidden>
+      <button class="menu-item" data-act="addTo">Добавить в…</button>
+    </div>`;
+  wrap.onclick = e => e.stopPropagation();
+  bindMovieCardMenu(wrap);
+  wrap.querySelector('[data-act="addTo"]').onclick = () => {
+    const menu = wrap.querySelector('[data-act="cardMenu"]');
+    menu.innerHTML = "";
+    renderAddTargetActions(menu, kinopoiskId, rooms);
+  };
+  return wrap;
+}
 
 // Карточка очереди — только queued (watched теперь отдельным списком в
 // renderHistoryCard ниже, см. renderMovies). Раскладка — сетка .queue-grid
@@ -697,6 +833,13 @@ function renderMovieCard(rm, room) {
 // Карточка истории — watched в ЭТОЙ комнате: кто и когда отметил (watchedBy
 // сматчен на фронте по members, т.к. на бэке джойна нет — см. план), плюс
 // личная/средняя оценка (уместна тут же, раз фильм уже просмотрен).
+// В отличие от карточки очереди тут нет ни стрелки «Подробнее», ни
+// разворачивания: описание короткое и видно сразу (.movie-desc-preview,
+// line-clamp в styles.css), а «Вернуть в очередь» — единственный пункт
+// в меню-«…» в углу (тот же bindMovieCardMenu/closeCardMenu, что и у
+// карточки очереди, — общий механизм закрытия по клику снаружи уже
+// подключён один раз на весь документ, см. document.addEventListener
+// выше по файлу).
 function renderHistoryCard(rm, room, members) {
   const mv = rm.movie;
   const card = el("div", "movie-card");
@@ -705,27 +848,40 @@ function renderHistoryCard(rm, room, members) {
   const whoText = watcher ? who(watcher) : "кто-то из участников";
   const whenText = rm.watchedAt ? new Date(rm.watchedAt).toLocaleDateString("ru") : "—";
   card.innerHTML = `
-    <div class="movie-card-head">
-      ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
-      <div class="movie-info">
-        <div class="title">${esc(mv.title)}${esc(year)}</div>
-        <div class="chip-row">${movieChipsHtml(mv)}</div>
-        <div class="muted sub">Просмотрено ${esc(whenText)} · ${esc(whoText)}</div>
+    <div class="history-body">
+      <div class="history-main">
+        <div class="title-row">
+          <div class="movie-card-head">
+            ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
+            <div class="movie-info">
+              <div class="title">${esc(mv.title)}${esc(year)}</div>
+              <div class="chip-row">${movieChipsHtml(mv)}</div>
+              <div class="muted sub">Просмотрено ${esc(whenText)} · ${esc(whoText)}</div>
+            </div>
+          </div>
+          <div class="title-actions">
+            <div class="menu-wrap">
+              <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Действия с фильмом" aria-label="Действия с фильмом" aria-haspopup="true" aria-expanded="false">
+                <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
+              </button>
+              <div class="menu" data-act="cardMenu" hidden>
+                <button class="menu-item" data-act="watched">Вернуть в очередь</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="score-row">
+          <div data-act="score"></div>
+          <span class="muted">${rm.mark.avgScore != null ? `Средняя: ${rm.mark.avgScore}${rm.mark.ratingCount > 1 ? ` (${rm.mark.ratingCount})` : ""}` : "Средней оценки пока нет"}</span>
+        </div>
       </div>
-    </div>
-    <div class="movie-detail hidden"></div>
-    <div class="row">
-      <button class="icon-btn xs" data-act="more" type="button" title="Подробнее" aria-label="Подробнее" aria-expanded="false">${CHEVRON_DOWN_ICON}</button>
-      <button class="btn tonal" data-act="watched">Вернуть в очередь</button>
-    </div>
-    <div class="score-row">
-      <div data-act="score"></div>
-      <span class="muted">${rm.mark.avgScore != null ? `Средняя: ${rm.mark.avgScore}${rm.mark.ratingCount > 1 ? ` (${rm.mark.ratingCount})` : ""}` : "Средней оценки пока нет"}</span>
+      ${mv.description ? `<div class="history-desc"><p class="movie-desc-preview">${esc(mv.description)}</p></div>` : ""}
     </div>`;
 
-  bindMovieDetailToggle(card, mv);
+  bindMovieCardMenu(card);
 
   card.querySelector('[data-act="watched"]').onclick = () => act(async () => {
+    closeCardMenu();
     await api(`/rooms/${room.id}/movies/${mv.kinopoiskId}/watched`, { method: "DELETE" });
     await openRoom(room.id);
   }, "Возвращено в очередь");
@@ -958,8 +1114,9 @@ bindModal("movieInfoModalBackdrop", null, "movieInfoModalClose");
 
 // ───────────────────────── глобальный поиск (шапка, любая комната) ─────────────────────────
 // По сути то же самое, что модалка «Добавить фильм» внутри комнаты выше, но
-// без заранее известной комнаты: у каждого результата — выбор цели
-// (renderRoomPicker) вместо одной кнопки «Добавить» (см. план задачи 2).
+// без заранее известной комнаты: у каждого результата — компактное меню
+// «Добавить в…» (renderAddToMenu) вместо клика по всей карточке (см. план
+// задачи 4).
 bindModal("globalSearchModalBackdrop", null, "globalSearchModalClose");
 $("globalSearchDoneBtn").onclick = () => closeModal("globalSearchModalBackdrop");
 $("globalSearchBtn").onclick = () => {
@@ -985,6 +1142,7 @@ $("globalSearchInput").addEventListener("keydown", e => { if (e.key === "Enter")
 function renderGlobalSearchResults(movies, rooms) {
   const box = $("globalSearchResults");
   box.textContent = "";
+  openCardMenu = null; // старые строки со своими меню «Добавить в…» уходят целиком
   if (!movies.length) { box.append(el("p", "muted", "Ничего не нашлось.")); return; }
   for (const mv of movies) box.append(renderSearchResultRow(mv, rooms));
 }
@@ -1049,83 +1207,174 @@ async function showDraw(roomId) {
   renderDrawSetup();
 }
 
+/** Кандидаты в том же виде, в каком их присылает POST /rooms/:id/draw
+    ({kinopoiskId, weight, title, year, posterUrl}) — собраны из уже
+    загруженной очереди комнаты (state.room.movies, только status==="queued",
+    см. renderMovies). Используются ТОЛЬКО для живого превью метода до
+    запуска розыгрыша — реальный исход всегда решает сервер, лишний запрос
+    сюда не нужен (см. план задачи 3 и шапку файла про правило сервера). */
+function queuedCandidatesFromRoom() {
+  if (!state.room) return [];
+  return state.room.movies
+    .filter(rm => rm.status === "queued")
+    .map(rm => ({
+      kinopoiskId: rm.movie.kinopoiskId, weight: rm.weight || 1,
+      title: rm.movie.title, year: rm.movie.year, posterUrl: rm.movie.posterUrl,
+    }));
+}
+
+/** Живое превью выбранного метода в области #drawStage: тот же самый
+    компонент, что потом анимируется по «Выбрать случайный», просто в
+    состоянии покоя (renderReel/renderWheelSvg умеют рисовать и без
+    прокрутки) — рендерится сразу при переключении .mini-seg, без похода на
+    сервер. Не трогает стадию, пока идёт сама прокрутка (drawState.spinning),
+    чтобы не перебить анимацию. */
+function renderMethodPreview() {
+  if (!drawState || drawState.spinning) return;
+  const stage = $("drawStage");
+  stage.innerHTML = "";
+  const candidates = queuedCandidatesFromRoom();
+  if (!candidates.length) return;
+  if (drawState.method === "weighted_random") renderReel(stage, candidates, 0, false);
+  else renderWheelSvg(stage, candidates);   // «Колесо» и «На выбывание» превьюшатся одним и тем же колесом в покое
+}
+
 function renderDrawSetup() {
   $("drawSetup").classList.remove("hidden");
   const stage = $("drawStage");
-  stage.classList.add("hidden");
-  stage.innerHTML = "";
+  stage.classList.remove("hidden");
   const result = $("drawResult");
   result.classList.add("hidden");
   result.innerHTML = "";
-  updateMethodButtons();
   const btn = $("drawStartBtn");
   btn.disabled = false;
-  btn.textContent = "Крутить";
+  btn.textContent = "Выбрать случайный";
+  updateMethodButtons();
 }
 
 function updateMethodButtons() {
   $("methodWeightedBtn").classList.toggle("sel", drawState.method === "weighted_random");
   $("methodWheelBtn").classList.toggle("sel", drawState.method === "wheel");
   $("methodEliminationBtn").classList.toggle("sel", drawState.method === "elimination");
+  renderMethodPreview();
 }
-$("methodWeightedBtn").onclick = () => { if (!drawState) return; drawState.method = "weighted_random"; updateMethodButtons(); };
-$("methodWheelBtn").onclick = () => { if (!drawState) return; drawState.method = "wheel"; updateMethodButtons(); };
-$("methodEliminationBtn").onclick = () => { if (!drawState) return; drawState.method = "elimination"; updateMethodButtons(); };
+$("methodWeightedBtn").onclick = () => { if (!drawState || drawState.spinning) return; drawState.method = "weighted_random"; updateMethodButtons(); };
+$("methodWheelBtn").onclick = () => { if (!drawState || drawState.spinning) return; drawState.method = "wheel"; updateMethodButtons(); };
+$("methodEliminationBtn").onclick = () => { if (!drawState || drawState.spinning) return; drawState.method = "elimination"; updateMethodButtons(); };
 
 $("drawStartBtn").onclick = async () => {
-  if (!drawState) return;
+  if (!drawState || drawState.spinning) return;
   const btn = $("drawStartBtn");
+  drawState.spinning = true;
   btn.disabled = true;
   btn.textContent = "Крутим…";
+  $("drawMethodRow").classList.add("disabled");
   const data = await act(() => api(`/rooms/${drawState.roomId}/draw`, { method: "POST", body: { method: drawState.method } }));
-  if (!data) { btn.disabled = false; btn.textContent = "Крутить"; return; }
+  if (!data) { drawState.spinning = false; btn.disabled = false; btn.textContent = "Выбрать случайный"; $("drawMethodRow").classList.remove("disabled"); return; }
 
-  $("drawSetup").classList.add("hidden");
+  // Переключатель метода (#drawMethodRow, внутри #drawSetup) остаётся на
+  // экране всё время розыгрыша, включая саму прокрутку — прячем весь
+  // #drawSetup только на финальном экране результата, см. showDrawResult и
+  // план задачи 3. #drawStage перерисовывается с нуля на каждый прогон —
+  // старое превью/предыдущая прокрутка не может «залипнуть» на экране.
   const stage = $("drawStage");
-  stage.classList.remove("hidden");
   stage.innerHTML = "";
 
   if (drawState.method === "wheel") await animateWheel(stage, data.candidates, data.resultKinopoiskId);
   else if (drawState.method === "elimination") await animateElimination(stage, data.candidates, data.rounds, data.resultKinopoiskId);
   else await animateWeightedRandom(stage, data.candidates, data.resultKinopoiskId);
 
+  drawState.spinning = false;
+  $("drawMethodRow").classList.remove("disabled");
   showDrawResult(data.candidates, data.resultKinopoiskId);
 };
 
 const prefersReducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-/** Перелистывание карточек-кандидатов, замедляющееся к финалу, останавливается
-    ровно на resultId (индекс вычислен так, чтобы последний кадр = результат). */
-function animateWeightedRandom(container, candidates, resultId) {
+// Сколько полных кругов лента прокручивает мимо кандидатов, прежде чем
+// доехать до результата — только для того, чтобы движение читалось как
+// «крутится», сам результат уже известен (см. renderReel).
+const REEL_LAPS = 5;
+
+/** Горизонтальная карусель постеров-кандидатов: строит .reel-track из
+    .reel-item (переиспользует и для живого превью метода в состоянии покоя,
+    и для самой прокрутки, см. renderMethodPreview/animateWeightedRandom) и
+    переводит её translateX-ом так, чтобы .reel-item под индексом targetIndex
+    (в исходном массиве candidates) оказался ровно по центру, под
+    неподвижным .reel-pointer.
+    - animate=false (превью) — лента сразу рисуется в покое на targetIndex,
+      без transition.
+    - animate=true (сам розыгрыш) — сначала строится несколько кругов по
+      кандидатам (REEL_LAPS), затем лента с CSS-замедлением доезжает до того
+      же targetIndex; конечный кадр совпадает с тем, что рисует превью для
+      того же индекса — один и тот же .reel-item, тот же settle().
+    При prefers-reduced-motion (или n<=1) анимация не проигрывается — сразу
+    показывается финальное состояние. Каждый вызов строит трек заново, так
+    что «Крутить ещё раз» не залипает на кадре предыдущего прогона. */
+function renderReel(container, candidates, targetIndex, animate) {
+  container.textContent = "";
+  const n = candidates.length;
+  const doAnimate = !!animate && !prefersReducedMotion() && n > 1;
+
+  const viewport = el("div", "reel-viewport");
+  const pointer = el("div", "reel-pointer");
+  const track = el("div", "reel-track");
+
+  let landIndex = targetIndex;
+  const sequence = [];
+  if (doAnimate) {
+    landIndex = REEL_LAPS * n + targetIndex;
+    for (let i = 0; i <= landIndex; i++) sequence.push(candidates[i % n]);
+  } else {
+    for (let i = 0; i < n; i++) sequence.push(candidates[i]);
+  }
+
+  for (const c of sequence) {
+    const item = el("div", "reel-item");
+    item.innerHTML = c.posterUrl
+      ? `<img class="movie-poster" src="${esc(c.posterUrl)}" alt="">`
+      : '<div class="movie-poster"></div>';
+    const year = c.year ? ` (${c.year})` : "";
+    item.append(el("div", "title", `${c.title || ""}${year}`));
+    track.append(item);
+  }
+
+  viewport.append(pointer, track);
+  container.append(viewport);
+
+  const settle = () => {
+    const first = track.firstElementChild;
+    const itemW = first ? first.getBoundingClientRect().width : 0;
+    const vw = viewport.getBoundingClientRect().width;
+    const tx = vw / 2 - (landIndex * itemW + itemW / 2);
+    track.style.transform = `translateX(${tx}px)`;
+  };
+
+  if (!doAnimate) { track.style.transition = "none"; settle(); return Promise.resolve(); }
+
   return new Promise(resolve => {
-    const track = el("div", "draw-reel");
-    container.append(track);
-    const n = candidates.length;
-    const resultIndex = Math.max(0, candidates.findIndex(c => c.kinopoiskId === resultId));
-
-    function showCard(idx) {
-      const c = candidates[idx];
-      const year = c.year ? ` (${c.year})` : "";
-      track.innerHTML = c.posterUrl
-        ? `<img class="movie-poster" src="${esc(c.posterUrl)}" alt="">`
-        : '<div class="movie-poster"></div>';
-      track.append(el("div", "title", `${c.title || ""}${year}`));
-    }
-
-    if (n <= 1 || prefersReducedMotion()) { showCard(resultIndex); return resolve(); }
-
-    const steps = Math.max(16, n * 3);
-    const start = (((resultIndex - (steps - 1)) % n) + n) % n;
-    let k = 0;
-    (function tick() {
-      showCard((start + k) % n);
-      if (k >= steps - 1) return resolve();
-      const t = k / (steps - 1);
-      const delay = 70 + t * t * 380;   // ease-out: быстро в начале, медленно к финалу
-      k++;
-      setTimeout(tick, delay);
-    })();
+    // Стартуем с 0px без анимации, затем на следующем кадре включаем переход
+    // к финальному сдвигу — тот же приём, что и spinWheelTo ниже, иначе
+    // браузер схлопнёт оба состояния в один кадр.
+    track.style.transition = "none";
+    track.style.transform = "translateX(0px)";
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      track.style.transition = "";   // вернуть CSS-transition из styles.css
+      settle();
+    }));
+    let done = false;
+    const finish = () => { if (done) return; done = true; resolve(); };
+    track.addEventListener("transitionend", finish, { once: true });
+    setTimeout(finish, 4600);   // подстраховка, если transitionend не пришёл
   });
+}
+
+/** Тонкая обёртка над renderReel: находит индекс результата в candidates и
+    едет к нему по-настоящему (animate=true) — сам результат уже прислан
+    сервером, здесь только анимация. */
+function animateWeightedRandom(container, candidates, resultId) {
+  const resultIndex = Math.max(0, candidates.findIndex(c => c.kinopoiskId === resultId));
+  return renderReel(container, candidates, resultIndex, true);
 }
 
 // Свой рендер колеса (SVG-секторы по числу кандидатов), не завязан на
@@ -1133,13 +1382,16 @@ function animateWeightedRandom(container, candidates, resultId) {
 // отражая вероятность, не только визуал.
 const WHEEL_COLORS = ["#ff3d5a", "#7f1d1d", "#ff7a8f", "#c81e3a", "#a13350", "#ffb3c0", "#e0526d", "#5c1420"];
 
-/** Рисует SVG-колесо (секторы по весу кандидата + легенда) в container,
-    полностью заменяя его содержимое. Общая часть между обычным розыгрышем
-    (animateWheel) и каждым раундом «На выбывание» (animateElimination) —
-    выбывание крутит то же колесо, просто с уменьшающимся набором кандидатов
-    на каждой итерации. Каждый <path> сектора помечен data-kp — по этому
-    атрибуту animateElimination гасит ровно выбывший сектор. Возвращает
-    {svg, mids} — mids нужен spinWheelTo ниже, чтобы знать угол остановки. */
+/** Рисует SVG-колесо (секторы по весу кандидата, с названиями фильмов прямо
+    в секторах — см. ниже) в container, полностью заменяя его содержимое, и
+    оставляет его в покое (без вращения) — так его же используют и как живое
+    превью метода (renderMethodPreview), и как стартовый кадр перед
+    spinWheelTo. Общая часть между обычным розыгрышем (animateWheel) и каждым
+    раундом «На выбывание» (animateElimination) — выбывание крутит то же
+    колесо, просто с уменьшающимся набором кандидатов на каждой итерации.
+    Каждый <path> сектора помечен data-kp — по этому атрибуту
+    animateElimination гасит ровно выбывший сектор. Возвращает {svg, mids} —
+    mids нужен spinWheelTo ниже, чтобы знать угол остановки. */
 function renderWheelSvg(container, candidates) {
   container.textContent = "";
   const n = candidates.length;
@@ -1154,7 +1406,6 @@ function renderWheelSvg(container, candidates) {
   let angle = 0;
   const sectorsSvg = [];
   const labelsSvg = [];
-  const legendItems = [];
   const mids = [];
   candidates.forEach((c, i) => {
     const sweep = 360 * ((c.weight || 1) / totalWeight);
@@ -1167,10 +1418,32 @@ function renderWheelSvg(container, candidates) {
     const largeArc = sweep > 180 ? 1 : 0;
     sectorsSvg.push(`<path data-kp="${c.kinopoiskId}" d="M${cx},${cy} L${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r} 0 ${largeArc} 1 ${x2.toFixed(2)},${y2.toFixed(2)} Z" fill="${color}" stroke="var(--md-sys-color-surface)" stroke-width="1.5"/>`);
     if (n <= 24) {
-      const [lx, ly] = toXY(mid, r * 0.62);
-      labelsSvg.push(`<text class="sector-label" x="${lx.toFixed(2)}" y="${ly.toFixed(2)}">${i + 1}</text>`);
+      // Название читаем от центра наружу вдоль радиуса сектора: точка (lx,ly)
+      // на радиусе 20 (около ступицы) и rotate вокруг ЭТОЙ ЖЕ точки на угол,
+      // разворачивающий локальный «+x» текста вдоль направления mid (вывод:
+      // rotate = mid-90, см. toXY). В левой половине колеса такой поворот
+      // читался бы вверх ногами — там добавляем ещё 180° и меняем
+      // text-anchor на end, тогда текст всё так же тянется от центра к краю,
+      // но не перевёрнут (замена .wheel-legend, см. план задачи 4).
+      const [lx, ly] = toXY(mid, 20);
+      const rotBase = mid - 90;
+      const norm = ((rotBase % 360) + 540) % 360 - 180; // нормализация к (-180,180]
+      const flip = norm > 90 || norm < -90;
+      const rot = flip ? norm + 180 : norm;
+      const anchor = flip ? "end" : "start";
+      // Лимит символов — грубо пропорционален углу сектора: у широких
+      // секторов (мало кандидатов) название почти целиком, у узких —
+      // короче, чтобы не наезжать на соседей. Очень много кандидатов сразу —
+      // ожидаемый компромисс по читаемости (см. план), но не по вёрстке.
+      const maxChars = Math.max(6, Math.min(16, Math.round(sweep / 6)));
+      const title = c.title || "";
+      const label = title.length > maxChars ? `${title.slice(0, maxChars - 1).trimEnd()}…` : title;
+      const full = `${title}${c.year ? ` (${c.year})` : ""}`;
+      labelsSvg.push(
+        `<text class="sector-label" x="${lx.toFixed(2)}" y="${ly.toFixed(2)}" text-anchor="${anchor}" ` +
+        `transform="rotate(${rot.toFixed(2)} ${lx.toFixed(2)} ${ly.toFixed(2)})"><title>${esc(full)}</title>${esc(label)}</text>`
+      );
     }
-    legendItems.push(`<span><span class="dot" style="background:${color}"></span>${i + 1}. ${esc(c.title || "")}${c.year ? ` (${c.year})` : ""}</span>`);
     angle = endA;
   });
 
@@ -1179,9 +1452,6 @@ function renderWheelSvg(container, candidates) {
     <div class="wheel-pointer"></div>
     <svg viewBox="0 0 ${size} ${size}"><g>${sectorsSvg.join("")}${labelsSvg.join("")}</g></svg>`;
   container.append(wrap);
-  const legend = el("div", "wheel-legend");
-  legend.innerHTML = legendItems.join("");
-  container.append(legend);
 
   return { svg: wrap.querySelector("svg"), mids };
 }
@@ -1251,6 +1521,11 @@ async function animateElimination(container, candidates, rounds, resultId) {
 function showDrawResult(candidates, resultId) {
   const mv = candidates.find(c => c.kinopoiskId === resultId) || {};
   const roomId = drawState.roomId;
+  // Переключатель метода виден весь розыгрыш (выбор метода + сама прокрутка,
+  // см. drawStartBtn.onclick) — прячем его вместе с #drawStage только здесь,
+  // на самом финальном экране результата (см. план задачи 3).
+  $("drawSetup").classList.add("hidden");
+  $("drawStage").classList.add("hidden");
   const box = $("drawResult");
   box.classList.remove("hidden");
   const year = mv.year ? ` (${mv.year})` : "";

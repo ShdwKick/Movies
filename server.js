@@ -743,6 +743,26 @@ async function api(req, res, seg, user, query) {
     return json(res, 200, { movies: rows.map(moviePayload) });
   }
 
+  // ── карточка фильма целиком (используется «Подробнее» у результатов
+  // /api/search — те приходят БЕЗ director/actors/description, полная карточка
+  // появляется только через poiskkino.getById/movie/{id}) ──────
+  // Тот же ensureMovieCached, что и POST /rooms/:id/movies и POST /my-list —
+  // отдельного лимита/пути в API не заводим: сеть трогаем, только если записи
+  // нет ИЛИ detail_cached_at пуст, иначе просто отдаём уже закэшированное.
+  if (seg.length === 3 && seg[1] === "movies") {
+    if (m !== "GET") return json(res, 405, { error: "method not allowed" });
+    const kpId = parseInt(seg[2], 10);
+    if (!Number.isFinite(kpId) || kpId <= 0) return json(res, 400, { error: "bad kinopoiskId" });
+    let movie;
+    try { movie = await ensureMovieCached(kpId); }
+    catch (e) { return poiskkinoError(res, e); }
+    // Ответ — moviePayload() как есть, без обёртки {movie: ...}: фронт
+    // (bindMovieDetailToggle) делает Object.assign(mv, data) прямо поверх
+    // объекта результата поиска — обёртка потребовала бы data.movie и
+    // отдельного разбора на вызывающей стороне без всякой пользы.
+    return json(res, 200, moviePayload(movie));
+  }
+
   // ── лента «Что мы смотрели» (мои просмотренные, глобально) ───
   if (seg.length === 2 && seg[1] === "watched") {
     if (m !== "GET") return json(res, 405, { error: "method not allowed" });
@@ -1037,16 +1057,21 @@ async function api(req, res, seg, user, query) {
 
       // POST/DELETE /rooms/:id/movies/:kinopoiskId/watched — статус ЭТОЙ комнаты
       // (queued|watched) плюс, только на POST, апсерт личной пометки movie_marks
-      // (глобальный факт «я это видел»). DELETE трогает исключительно комнатный
-      // статус: то, что кто-то в комнате вернул фильм в очередь, не отменяет
-      // личный факт просмотра — это два разных факта (см. план, movie_marks).
+      // (глобальный факт «я это видел») ВСЕМ ТЕКУЩИМ участникам комнаты —
+      // посмотрели вместе, значит для каждого. watched_by у room_movies при этом
+      // остаётся именно тем, кто нажал (факт «кто отметил»), а не размножается.
+      // DELETE трогает исключительно комнатный статус: то, что кто-то в комнате
+      // вернул фильм в очередь, не отменяет личный факт просмотра ни у кого из
+      // участников — это два разных факта (см. план, movie_marks).
       if (tail.length === 3 && tail[2] === "watched") {
         const kpId = parseInt(tail[1], 10);
         if (!Number.isFinite(kpId)) return json(res, 400, { error: "bad kinopoiskId" });
         if (!stmt.roomMovie.get(roomId, kpId)) return json(res, 404, { error: "not found" });
         if (m === "POST") {
           stmt.setRoomMovieWatched.run(now(), user.id, roomId, kpId);
-          stmt.markSetWatched.run(user.id, kpId, now(), now());
+          for (const member of stmt.members.all(roomId)) {
+            stmt.markSetWatched.run(member.user_id, kpId, now(), now());
+          }
           return json(res, 200, { status: "watched", mark: markPayload(stmt.markGet.get(user.id, kpId)) });
         }
         if (m === "DELETE") {

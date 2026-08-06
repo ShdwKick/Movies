@@ -89,9 +89,11 @@
   </div>
 
   <!-- Витрина последних закэшированных фильмов (GET /api/movies) — секция
-       скрыта целиком, пока кэш пуст (см. renderCachedMovies в app.js). -->
+       скрыта целиком, пока кэш пуст (см. renderCachedMovies в app.js).
+       Без текстового заголовка — только визуальное отделение (border-top на
+       самой обёртке, см. #cachedMoviesWrap в styles.css).
+       TODO(будущее): разделение витрины по жанрам. -->
   <div id="cachedMoviesWrap" hidden>
-    <h2>Из базы</h2>
     <div class="movie-grid" id="cachedMoviesList"></div>
   </div>
 </section>
@@ -157,7 +159,6 @@
   </div>
   <input type="file" id="importCsvInput" class="hidden" accept=".csv,text/csv">
 
-  <h2>Очередь</h2>
   <div class="row" id="drawLinkRow" hidden>
     <button class="btn filled" id="drawLinkBtn">Крутить</button>
   </div>
@@ -210,9 +211,11 @@
         <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
-    <div class="row">
+    <div class="search-row">
       <input type="text" id="globalSearchInput" placeholder="Название фильма" maxlength="200">
-      <button class="btn tonal" id="globalSearchSubmitBtn">Искать</button>
+      <button class="icon-btn tonal" id="globalSearchSubmitBtn" title="Искать" aria-label="Искать">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      </button>
     </div>
     <div id="globalSearchResults"></div>
     <div class="row">
@@ -264,7 +267,7 @@
       </div>
     </div>
     <div class="row">
-      <button class="btn filled" id="drawStartBtn" type="button">Крутить</button>
+      <button class="draw-start-btn" id="drawStartBtn" type="button">Выбрать случайный</button>
     </div>
   </div>
 

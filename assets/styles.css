@@ -179,12 +179,23 @@ a{color:var(--md-sys-color-primary)}
   transition:background .18s,color .18s;
 }
 .mini-seg button.sel{background:var(--md-sys-color-surface-container-lowest);color:var(--md-sys-color-on-surface);box-shadow:var(--e1)}
+/* Во время прокрутки розыгрыша переключатель метода остаётся на экране
+   (см. план задачи «Экран розыгрыша»), но временно не кликабелен —
+   приглушаем, чтобы это было видно, а не только угадывалось по отсутствию
+   реакции на клик. */
+.mini-seg.disabled{opacity:.5;pointer-events:none}
 
 /* ===================== CHIP ===================== */
+/* min-height (не фиксированный height) + max-width:100% + overflow-wrap —
+   жанры у некоторых фильмов приходят одной длинной строкой (см.
+   movieChipsHtml в app.js, все жанры — один чип через запятую) и должны
+   переноситься на несколько строк ВНУТРИ чипа, а не обрезаться и не вылезать
+   за правый край карточки (см. план задачи «карточки очереди шире»). */
 .chip{
-  display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;
-  border-radius:var(--md-sys-shape-corner-s);font-size:12px;font-weight:600;
+  display:inline-flex;align-items:center;gap:6px;min-height:24px;padding:4px 10px;
+  border-radius:var(--md-sys-shape-corner-s);font-size:12px;font-weight:600;line-height:1.3;
   background:var(--md-sys-color-surface-container-high);color:var(--md-sys-color-on-surface-variant);
+  max-width:100%;overflow-wrap:break-word;
 }
 .chip.rating{background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container)}
 .chip.owner{background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container)}
@@ -272,11 +283,21 @@ select{
 .movie-card-pick:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
 .movie-card-pick .movie-card-head{align-items:flex-start}
 
+/* Стрелка «Подробнее» + меню «Добавить в…» в шапке результата ГЛОБАЛЬНОГО
+   поиска (renderSearchResultRow) — тот же приём, что и одиночная icon-btn
+   «Подробнее» у .movie-card-pick выше (третий flex-элемент movie-card-head,
+   без absolute-позиционирования), но их тут два, поэтому в общем
+   flex-контейнере с небольшим gap. margin-top:0 на .menu-wrap — тот же
+   сброс, что у .title-actions/.appbar-inner, тут это не строка заголовка. */
+.movie-card-head-actions{display:flex;align-items:flex-start;gap:.3rem;flex:none}
+.movie-card-head-actions .menu-wrap{margin-top:0}
+
 /* Очередь комнаты — сетка, а не вертикальная лента: карточка стала у́же
    (постер+чипы+кнопки в углах, а не на всю ширину колонки), плитки уже,
-   чем .movie-grid (там только постер+название), но всё равно 2-3 в ряд на
-   экране ~1080px (см. план задачи «сетка очереди»). */
-.queue-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(20rem,1fr));margin-top:10px}
+   чем .movie-grid (там только постер+название). minmax 25rem (было 20rem,
+   см. план задачи «карточки очереди шире») — с запасом под карточки с
+   длинным списком жанров, на экране ~1080px всё ещё 2-3 в ряд. */
+.queue-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(25rem,1fr));margin-top:10px}
 /* Разворот «Подробнее» у карточки очереди — карточка тянется на всю ширину
    ряда чистым CSS Grid (класс ставит/снимает bindMovieDetailToggle в
    app.js), соседние карточки сами переставляются грид-раскладкой без
@@ -302,6 +323,48 @@ select{
 .movie-detail .movie-desc{color:var(--md-sys-color-on-surface-variant)}
 .movie-detail .movie-desc.has-sep{margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--md-sys-color-outline-variant)}
 
+/* Индикатор загрузки подробностей (renderMovieDetail в app.js) — результаты
+   /api/search не содержат director/actors/description, при первом раскрытии
+   карточки они догружаются отдельным запросом; спиннер держит место, пока он
+   летит. Общий свитч prefers-reduced-motion внизу файла (animation-duration:
+   .01ms !important на *) сам гасит вращение — отдельной медиа-записи тут
+   не нужно, как и у .icon-btn .chevron выше. */
+.detail-spinner{
+  width:1.4rem;height:1.4rem;margin:.4rem auto;
+  border:2px solid var(--md-sys-color-outline-variant);
+  border-top-color:var(--md-sys-color-primary);
+  border-radius:50%;
+  animation:spin .8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Карточка ИСТОРИИ (renderHistoryCard в app.js) — двухколоночная: слева вся
+   обычная инфа (постер/название/чипы/оценки), справа — описание. Раньше
+   описание просто лежало под остальным содержимым и оставляло пустое место
+   справа от короткой левой части; теперь это место занято текстом (см. план
+   задачи «история: описание в колонке»). Колонки через flex, а не grid —
+   .history-desc не всегда есть (у фильма может не быть description), а с
+   flex отсутствующий элемент просто не занимает место, без пустой колонки. */
+.history-body{display:flex;gap:1.2rem;align-items:flex-start}
+.history-main{flex:1 1 55%;min-width:0}
+.history-desc{flex:1 1 45%;min-width:0}
+/* -webkit-line-clamp — стандартный кросс-браузерный приём многострочного
+   обрезания текста (Chrome/Edge/большинство браузеров), без него текст
+   просто был бы длиннее по высоте, чем левая колонка. Строк больше, чем в
+   вертикальной раскладке (было 3) — колонка теперь высокая, а не узкая
+   полоса под карточкой. */
+.movie-desc-preview{
+  font-size:.9rem;color:var(--md-sys-color-on-surface-variant);
+  display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;
+  overflow:hidden;text-overflow:ellipsis;
+}
+/* Уже узкий экран — колонки не помещаются рядом читаемо, возвращаемся к
+   вертикальной раскладке (описание снова снизу, обрезание короче). */
+@media(max-width:36rem){
+  .history-body{flex-direction:column;gap:.6rem}
+  .history-desc .movie-desc-preview{-webkit-line-clamp:3}
+}
+
 /* «Подробнее» — компактная icon-btn со стрелкой вниз вместо текстовой кнопки
    (см. bindMovieDetailToggle в app.js): стрелка переворачивается на 180° при
    разворачивании блока. Общий свитч prefers-reduced-motion выше в файле
@@ -311,7 +374,7 @@ select{
 .icon-btn.expanded .chevron{transform:rotate(180deg)}
 
 .score-row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:.7rem}
-.star-rating{display:inline-flex;gap:2px}
+.star-rating{display:inline-flex;align-items:center;gap:2px}
 .star-rating .star-btn{
   padding:0;border-radius:var(--md-sys-shape-corner-xs);background:transparent;border:0;cursor:pointer;
   color:var(--md-sys-color-outline-variant);font-size:1.3rem;line-height:1;
@@ -319,21 +382,36 @@ select{
 }
 .star-rating .star-btn.filled{color:var(--flame-tip)}
 .star-rating .star-btn:hover{background:var(--md-sys-color-surface-container)}
+/* Цифра текущей/наведённой оценки справа от звёзд (см. renderStarRating) —
+   постоянно видимая, не только тултип. min-width гасит дрожание ряда при
+   переходе между однозначными и «10». */
+.star-rating-score{margin-left:.35rem;min-width:1.1em}
 
 /* ===================== ВИТРИНА «ИЗ БАЗЫ» (главная) =====================
    Тот же паттерн сетки, что .trip-grid в Trip/assets/styles.css — карточки
    переносятся по auto-fill, а не стоят одна под другой, как в остальных
    списках .movie-card (там своя вертикальная лента, margin-top держит зазор
    вместо grid-gap). */
-.movie-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));margin-top:10px}
+.movie-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(12.5rem,1fr));margin-top:10px}
 
-/* Компактная плитка витрины — только постер+название(+год), карточка
-   кликабельна целиком (та же кнопка-как-карточка идиома, что и .card у
-   комнат выше), в отличие от .movie-card результатов поиска, где действия —
-   отдельные кнопки внутри. Клик открывает #movieInfoModalBackdrop с полной
-   информацией (см. renderMovieTile/renderMovieInfoModal в app.js). */
+/* Обёртка витрины «Из базы» (главная) — раньше был текстовый <h2>, теперь
+   только визуальный разделитель от остального контента экрана (список
+   комнат/поиск по коду выше). TODO(будущее): разделение витрины по жанрам. */
+#cachedMoviesWrap{margin-top:1.6rem;padding-top:1.2rem;border-top:1px solid var(--md-sys-color-outline-variant)}
+
+/* Компактная плитка витрины — постер (с меню «Добавить в…» бейджем поверх
+   обложки) и строка название/год + «Смотреть» (см. renderMovieTile в app.js).
+   Плитка САМА больше не <button> (внутри появились свои кнопки — «Смотреть»
+   и меню «Добавить в…», а <button> в <button> невалиден), а
+   div[role=button][tabindex=0] — тот же приём, что и .movie-card-pick у
+   результатов локального поиска. Клик по самой плитке (не по вложенным
+   кнопкам) открывает #movieInfoModalBackdrop с полной информацией. */
 .movie-tile{
-  position:relative;overflow:hidden;display:flex;flex-direction:column;gap:.5rem;
+  /* overflow:visible намеренно — постер и так не касается скруглённых углов
+     карточки (за счёт padding), а выпадающее .menu поверх постера всплывает
+     АБСОЛЮТНЫМ позиционированием за пределы карточки; overflow:hidden здесь
+     раньше обрезал это меню невидимым, хотя атрибут hidden уже снят. */
+  position:relative;overflow:visible;display:flex;flex-direction:column;gap:.5rem;
   background:var(--md-sys-color-surface-container-lowest);
   border:1px solid var(--md-sys-color-outline-variant);
   border-radius:var(--md-sys-shape-corner-l);
@@ -342,9 +420,30 @@ select{
   animation:rise .4s var(--ease-emph-dec) both;
 }
 .movie-tile:hover{transform:translateY(-2px);box-shadow:var(--e2)}
-.movie-tile .movie-poster{width:100%;height:auto;aspect-ratio:2/3}
+.movie-tile:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
+.movie-tile .movie-poster{width:100%;height:auto;aspect-ratio:2/3;display:block}
 .movie-tile .title{font-weight:650;font-size:14px;line-height:1.25}
 .movie-tile .sub{margin-top:0}
+
+/* Обёртка постера плитки — позиционирующий контекст для бейджа меню
+   «Добавить в…» в правом верхнем углу обложки (задача «перекомпоновка
+   плитки»: раньше меню стояло отдельным рядом под названием). */
+.movie-tile-poster-wrap{position:relative}
+/* Меню-бейдж поверх постера: .menu-wrap и так position:relative (нужен как
+   якорь для выпадающего .menu), тут просто дополнительно вынесен в угол
+   обложки absolute-позиционированием — специфичность (2 класса) перебивает
+   базовое margin-top:1.1rem/position:relative у голого .menu-wrap. */
+.movie-tile-poster-wrap .menu-wrap{position:absolute;top:.4rem;right:.4rem;margin-top:0;z-index:1}
+/* Тёмная полупрозрачная подложка под иконкой — иначе «…» теряется на светлом
+   постере. currentColor:#fff тут же используется hover/active-подсветкой
+   кнопки (.icon-btn::after), поэтому отдельного :hover-правила не нужно. */
+.movie-tile-poster-wrap .menu-wrap>.icon-btn{background:rgba(0,0,0,.45);color:#fff}
+
+/* Строка название/год + «Смотреть» — в один ряд (задача «Смотреть» на
+   уровне заголовка, а не отдельным рядом внизу): текст слева и может занимать
+   несколько строк, кнопка справа не сжимается (flex:none у .icon-btn). */
+.movie-tile-title-row{display:flex;justify-content:space-between;align-items:flex-start;gap:.4rem}
+.movie-tile-title-col{min-width:0}
 
 /* Постер побольше — для карточки фильма внутри #movieInfoModalBackdrop
    (обычный .movie-poster в строке результата поиска мельче, тут модалка
@@ -435,27 +534,72 @@ ul.plain li:last-child{border-bottom:0}
 @media(prefers-reduced-motion:reduce){#snack{transition:none}}
 
 /* ===================== РОЗЫГРЫШ ===================== */
-.draw-reel{display:flex;flex-direction:column;align-items:center;gap:.6rem;padding:1.4rem 0;text-align:center}
-.draw-reel .movie-poster{width:8rem;height:12rem}
-.draw-reel .title{font-weight:600}
+/* «Выбрать случайный» — единственное реальное ДЕЙСТВИЕ на этом экране (метод
+   уже выбран сегментом выше), поэтому крупнее и заметнее обычной .btn.filled:
+   градиент на бренд-цвете сервиса (--flame-base/--flame-tip, theme.css), а не
+   просто заливка primary — тот же приём, что и .wheel-pointer/.reel-pointer
+   ниже, чтобы кнопка визуально «подсвечивала» именно это действие. */
+.draw-start-btn{
+  display:block;margin:.6rem auto 0;height:56px;padding:0 2.6rem;border:0;
+  border-radius:var(--md-sys-shape-corner-full);font:inherit;font-size:16px;font-weight:700;
+  letter-spacing:.01em;color:#fff;cursor:pointer;position:relative;overflow:hidden;
+  background:linear-gradient(135deg,var(--flame-base),var(--flame-tip));
+  box-shadow:0 4px 16px color-mix(in srgb, var(--flame-tip) 45%, transparent),var(--e1);
+  transition:transform .18s var(--ease-emph),box-shadow .18s;
+}
+.draw-start-btn::after{content:"";position:absolute;inset:0;background:#fff;opacity:0;transition:opacity .2s}
+.draw-start-btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px color-mix(in srgb, var(--flame-tip) 55%, transparent),var(--e2)}
+.draw-start-btn:hover::after{opacity:.1}
+.draw-start-btn:active::after{opacity:.16}
+.draw-start-btn:disabled{opacity:.6;cursor:default;pointer-events:none;transform:none;box-shadow:var(--e1)}
+
+/* Горизонтальная карусель постеров-кандидатов («Случайный выбор») — .reel-track
+   едет translateX и замедляется к финалу, останавливаясь ровно под
+   .reel-pointer (неподвижная отметка по центру viewport). Один и тот же
+   рендер (renderReel в app.js) используется и для живого превью метода в
+   состоянии покоя (animate=false), и для самой прокрутки (animate=true) —
+   поэтому карточки/разметка ровно те же, см. план задачи 2/3. */
+.reel-viewport{position:relative;overflow:hidden;width:min(30rem,92vw);margin:1.4rem auto 0;padding:.6rem 0}
+.reel-track{display:flex;align-items:flex-start;will-change:transform;transition:transform 3.2s cubic-bezier(.12,.67,.14,1)}
+.reel-item{flex:none;width:9rem;padding:0 .5rem;text-align:center}
+.reel-item .movie-poster{width:8rem;height:12rem;margin:0 auto}
+.reel-item .title{
+  margin-top:.4rem;font-weight:600;font-size:.82rem;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;
+}
+.reel-pointer{
+  position:absolute;top:0;bottom:0;left:50%;width:2px;transform:translateX(-1px);
+  background:var(--flame-tip);z-index:2;pointer-events:none;
+  box-shadow:0 0 8px color-mix(in srgb, var(--flame-tip) 70%, transparent);
+}
+.reel-pointer::before,.reel-pointer::after{
+  content:"";position:absolute;left:50%;transform:translateX(-50%);
+  width:0;height:0;border-left:.5rem solid transparent;border-right:.5rem solid transparent;
+}
+.reel-pointer::before{top:-.15rem;border-top:.7rem solid var(--flame-tip)}
+.reel-pointer::after{bottom:-.15rem;border-bottom:.7rem solid var(--flame-tip)}
+
 .wheel-wrap{position:relative;width:17rem;max-width:90vw;aspect-ratio:1;margin:1.4rem auto}
 .wheel-wrap svg{width:100%;height:100%;display:block;transition:transform 4.2s cubic-bezier(.12,.67,.14,1)}
 /* Гашение сектора выбывшего кандидата в раунде «На выбывание» — плавно, а не
    рывком, см. animateElimination в app.js. */
 .wheel-wrap svg path{transition:opacity .3s var(--ease-std)}
-.wheel-wrap .sector-label{font-size:.62rem;font-weight:700;fill:#fff;text-anchor:middle;dominant-baseline:middle}
+/* text-anchor НЕ здесь: renderWheelSvg (app.js) ставит его per-элементно
+   (start/end в зависимости от четверти) — CSS-правило перебило бы это, у
+   presentation-атрибутов ниже приоритет, чем у любого класса. */
+.wheel-wrap .sector-label{font-size:.58rem;font-weight:700;fill:#fff;dominant-baseline:middle}
 .wheel-pointer{position:absolute;top:-.65rem;left:50%;transform:translateX(-50%);
   width:0;height:0;border-left:.7rem solid transparent;border-right:.7rem solid transparent;
   border-top:1.15rem solid var(--flame-tip);z-index:2;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}
-.wheel-legend{display:flex;flex-wrap:wrap;gap:.35rem .9rem;justify-content:center;margin-top:.9rem;font-size:.82rem}
-.wheel-legend .dot{display:inline-block;width:.7em;height:.7em;border-radius:99px;margin-right:.35em;vertical-align:middle}
 .result-card{margin-top:1rem;text-align:center}
 .result-card img{
   width:9rem;height:13.5rem;object-fit:cover;border-radius:var(--md-sys-shape-corner-m);
   background:var(--md-sys-color-surface-container-high);
 }
 .result-actions{justify-content:center}
-@media(prefers-reduced-motion:reduce){.wheel-wrap svg,.wheel-wrap svg path{transition:none}}
+@media(prefers-reduced-motion:reduce){
+  .wheel-wrap svg,.wheel-wrap svg path,.reel-track,.draw-start-btn{transition:none}
+}
 
 /* ===================== ДОСТУПНОСТЬ ===================== */
 @media (prefers-reduced-motion: reduce){
