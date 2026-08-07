@@ -671,6 +671,34 @@ function renderStarRating(container, kinopoiskId, currentScore, onRated) {
   container.append(scoreLabel);
 }
 
+/** Обёртка над renderStarRating для мест, где держать открытую шкалу из
+    десяти звёзд для КАЖДОЙ карточки сразу избыточно (лента «Что мы
+    смотрели» — много карточек подряд, у большинства уже есть оценка):
+    если оценка уже стоит — показываем компактную цифру (.rating-chip),
+    клик по ней разворачивает полную шкалу для изменения; если оценки нет —
+    сразу открытая шкала, чтобы поставить оценку в один клик, без лишнего
+    разворачивания. */
+function renderRatingToggle(container, kinopoiskId, currentScore, onRated) {
+  const showStars = () => {
+    container.textContent = "";
+    renderStarRating(container, kinopoiskId, currentScore, score => {
+      currentScore = score;
+      if (onRated) onRated(score);
+      if (score) showChip(); else showStars();
+    });
+  };
+  const showChip = () => {
+    container.textContent = "";
+    container.classList.remove("star-rating");
+    const btn = el("button", "rating-chip", `★ ${currentScore}`);
+    btn.type = "button";
+    btn.title = "Изменить оценку";
+    btn.onclick = () => showStars();
+    container.append(btn);
+  };
+  if (currentScore) showChip(); else showStars();
+}
+
 /** «Подробнее» — раскрывающийся блок с режиссёром/актёрами/описанием, общий
     для карточки очереди (renderMovieCard) и карточки результата поиска
     (renderMovieResultCard). У карточки ИСТОРИИ (renderHistoryCard) стрелки и
@@ -1262,6 +1290,87 @@ $("deleteRoomBtn").onclick = async () => {
   if (r) location.hash = "#/";
 };
 
+// ───────────────────────── розыгрыш: настройки скорости ─────────────────────────
+// Три отдельных значения в localStorage — тот же паттерн, что и
+// "movies.theme"/ROUTE_KEY выше: drawDurationMin/drawDurationMax задают
+// диапазон панели настроек (#drawSettingsPanel), drawDuration — саму
+// длительность прокрутки в секундах. currentDrawDuration() читается ЗАНОВО в
+// момент запуска каждой анимации (renderReel/spinWheelTo), а не кэшируется
+// один раз при загрузке страницы — иначе смена настройки между прогонами не
+// подхватывалась бы следующим «Крутить ещё раз».
+const DRAW_DURATION_MIN_KEY = "movies.drawDurationMin";
+const DRAW_DURATION_MAX_KEY = "movies.drawDurationMax";
+const DRAW_DURATION_KEY = "movies.drawDuration";
+const DRAW_DURATION_DEFAULTS = { min: 1, max: 8, value: 3.2 };   // 3.2s — прежняя длительность карусели по факту (см. styles.css .reel-track)
+
+function loadDrawDurationSettings() {
+  const min = parseFloat(localStorage.getItem(DRAW_DURATION_MIN_KEY));
+  const max = parseFloat(localStorage.getItem(DRAW_DURATION_MAX_KEY));
+  const value = parseFloat(localStorage.getItem(DRAW_DURATION_KEY));
+  return {
+    min: Number.isFinite(min) ? min : DRAW_DURATION_DEFAULTS.min,
+    max: Number.isFinite(max) ? max : DRAW_DURATION_DEFAULTS.max,
+    value: Number.isFinite(value) ? value : DRAW_DURATION_DEFAULTS.value,
+  };
+}
+
+/** Валидирует и сохраняет разом все три величины (min≥0.5, max≥min+0.5,
+    value зажато в [min,max]) — вызывается при любом изменении любого поля
+    панели настроек (см. привязку инпутов ниже), возвращает уже
+    отвалидированные значения для синхронизации UI. */
+function saveDrawDurationSettings(next) {
+  const min = Math.max(0.5, Number.isFinite(next.min) ? next.min : DRAW_DURATION_DEFAULTS.min);
+  const max = Math.max(min + 0.5, Number.isFinite(next.max) ? next.max : DRAW_DURATION_DEFAULTS.max);
+  const rawValue = Number.isFinite(next.value) ? next.value : DRAW_DURATION_DEFAULTS.value;
+  const value = Math.min(max, Math.max(min, rawValue));
+  localStorage.setItem(DRAW_DURATION_MIN_KEY, String(min));
+  localStorage.setItem(DRAW_DURATION_MAX_KEY, String(max));
+  localStorage.setItem(DRAW_DURATION_KEY, String(value));
+  return { min, max, value };
+}
+
+/** Текущая длительность прокрутки в секундах — то, что реально читают
+    renderReel/spinWheelTo перед стартом КАЖДОЙ анимации. */
+function currentDrawDuration() { return loadDrawDurationSettings().value; }
+
+function closeDrawSettingsPanel() {
+  const panel = $("drawSettingsPanel");
+  if (!panel || panel.hidden) return;
+  panel.hidden = true;
+  $("drawSettingsBtn").setAttribute("aria-expanded", "false");
+}
+function syncDrawSettingsInputs() {
+  const { min, max, value } = loadDrawDurationSettings();
+  $("drawDurationMinInput").value = min;
+  $("drawDurationMaxInput").value = max;
+  $("drawDurationRange").min = min;
+  $("drawDurationRange").max = max;
+  $("drawDurationRange").value = value;
+  $("drawDurationInput").min = min;
+  $("drawDurationInput").max = max;
+  $("drawDurationInput").value = value;
+}
+$("drawSettingsBtn").onclick = e => {
+  e.stopPropagation();
+  const panel = $("drawSettingsPanel");
+  const willShow = panel.hidden;
+  if (willShow) syncDrawSettingsInputs();
+  panel.hidden = !willShow;
+  $("drawSettingsBtn").setAttribute("aria-expanded", String(willShow));
+};
+document.addEventListener("click", e => {
+  const panel = $("drawSettingsPanel");
+  if (!panel || panel.hidden) return;
+  if (!panel.contains(e.target) && e.target !== $("drawSettingsBtn") && !$("drawSettingsBtn").contains(e.target)) closeDrawSettingsPanel();
+});
+// min/max — границы диапазона, применяются по "change" (блюр/enter), чтобы
+// не обрезать многозначное число посреди набора; сама длительность (range +
+// её number-двойник) — по "input", вживую, друг друга синхронизируют.
+$("drawDurationMinInput").onchange = () => { saveDrawDurationSettings({ ...loadDrawDurationSettings(), min: parseFloat($("drawDurationMinInput").value) }); syncDrawSettingsInputs(); };
+$("drawDurationMaxInput").onchange = () => { saveDrawDurationSettings({ ...loadDrawDurationSettings(), max: parseFloat($("drawDurationMaxInput").value) }); syncDrawSettingsInputs(); };
+$("drawDurationRange").oninput = () => { saveDrawDurationSettings({ ...loadDrawDurationSettings(), value: parseFloat($("drawDurationRange").value) }); syncDrawSettingsInputs(); };
+$("drawDurationInput").oninput = () => { saveDrawDurationSettings({ ...loadDrawDurationSettings(), value: parseFloat($("drawDurationInput").value) }); syncDrawSettingsInputs(); };
+
 // ───────────────────────── розыгрыш (#/room/:id/draw) ─────────────────────────
 // Сервер решает результат ОДНИМ вызовом POST /draw и присылает и candidates,
 // и resultKinopoiskId вместе — вся анимация здесь клиентская, но раскладывает
@@ -1325,6 +1434,7 @@ function renderDrawSetup() {
   const btn = $("drawStartBtn");
   btn.disabled = false;
   btn.textContent = "Выбрать случайный";
+  closeDrawSettingsPanel();
   updateMethodButtons();
 }
 
@@ -1345,8 +1455,10 @@ $("drawStartBtn").onclick = async () => {
   btn.disabled = true;
   btn.textContent = "Крутим…";
   $("drawMethodRow").classList.add("disabled");
+  closeDrawSettingsPanel();
+  $("drawSettingsBtn").disabled = true;
   const data = await act(() => api(`/rooms/${drawState.roomId}/draw`, { method: "POST", body: { method: drawState.method } }));
-  if (!data) { drawState.spinning = false; btn.disabled = false; btn.textContent = "Выбрать случайный"; $("drawMethodRow").classList.remove("disabled"); return; }
+  if (!data) { drawState.spinning = false; btn.disabled = false; btn.textContent = "Выбрать случайный"; $("drawMethodRow").classList.remove("disabled"); $("drawSettingsBtn").disabled = false; return; }
 
   // Переключатель метода (#drawMethodRow, внутри #drawSetup) остаётся на
   // экране всё время розыгрыша, включая саму прокрутку — прячем весь
@@ -1362,6 +1474,7 @@ $("drawStartBtn").onclick = async () => {
 
   drawState.spinning = false;
   $("drawMethodRow").classList.remove("disabled");
+  $("drawSettingsBtn").disabled = false;
   showDrawResult(data.candidates, data.resultKinopoiskId);
 };
 
@@ -1380,6 +1493,62 @@ const prefersReducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)"
 const REEL_LAPS = 5;
 const PREVIEW_LEAD_LAPS = 2;
 const TRAIL_LAPS = 2;
+
+// «Coverflow»-эффект (см. план задачи «фокус-эффект карусели»): элемент под
+// неподвижным .reel-pointer крупнее соседей — и в покое (превью метода), и
+// живьём во время самой прокрутки. REEL_FOCUS_SCALE — масштаб «просто
+// центрального» элемента (в любой момент, включая покой), REEL_WINNER_SCALE
+// — отдельный, ещё более крупный акцент СВЕРХ этого, но только у победителя
+// ПОСЛЕ приземления ленты (applyReelFocusScale/markReelWinner ниже).
+const REEL_FOCUS_SCALE = 1.35;
+const REEL_WINNER_SCALE = 1.7;
+
+/** Масштабирует каждый .reel-item внутри viewport по расстоянию его центра
+    до центра viewport (там, где неподвижный .reel-pointer) — линейно от
+    REEL_FOCUS_SCALE в центре до 1 на расстоянии одной ширины элемента и
+    дальше. Дёргается и один раз в покое (после settle(), см. ниже), и на
+    каждом кадре во время прокрутки (см. startReelFocusLoop) — сам расчёт
+    один и тот же, оба места просто по-разному его вызывают. */
+function applyReelFocusScale(viewport) {
+  const items = viewport.querySelectorAll(".reel-item");
+  if (!items.length) return;
+  const vpRect = viewport.getBoundingClientRect();
+  const centerX = vpRect.left + vpRect.width / 2;
+  const itemW = items[0].getBoundingClientRect().width || 1;
+  for (const item of items) {
+    const r = item.getBoundingClientRect();
+    const dist = Math.abs(r.left + r.width / 2 - centerX);
+    const t = Math.min(1, dist / itemW);
+    const scale = REEL_FOCUS_SCALE - (REEL_FOCUS_SCALE - 1) * t;
+    item.style.transform = `scale(${scale.toFixed(3)})`;
+  }
+}
+
+/** Стартует rAF-цикл, непрерывно пересчитывающий applyReelFocusScale, пока
+    едет лента (без этого масштаб центра менялся бы скачком только в конце —
+    см. план задачи 6). Возвращает stop() — renderReel вызывает её в finish(),
+    когда прокрутка (transitionend/таймаут-подстраховка) завершилась. */
+function startReelFocusLoop(viewport) {
+  let raf = requestAnimationFrame(function tick() {
+    applyReelFocusScale(viewport);
+    raf = requestAnimationFrame(tick);
+  });
+  return () => cancelAnimationFrame(raf);
+}
+
+/** Финальный акцент победителя: элемент под индексом landIndex (тот, что
+    приземлился под указателем) получает ЕЩЁ больший масштаб, чем просто
+    «центральный», — плавный переход обеспечивает CSS-transition на
+    .reel-item (см. styles.css), под prefers-reduced-motion она гасится
+    глобальным правилом в конце файла, сам факт «победитель крупнее» — нет
+    (см. план: это не движение, а состояние). */
+function markReelWinner(viewport, landIndex) {
+  const items = viewport.querySelectorAll(".reel-item");
+  const winner = items[landIndex];
+  if (!winner) return;
+  winner.classList.add("reel-item-winner");
+  winner.style.transform = `scale(${REEL_WINNER_SCALE})`;
+}
 
 /** Горизонтальная карусель постеров-кандидатов: строит .reel-track из
     .reel-item (переиспользует и для живого превью метода в состоянии покоя,
@@ -1403,6 +1572,10 @@ function renderReel(container, candidates, targetIndex, animate) {
   container.textContent = "";
   const n = candidates.length;
   const doAnimate = !!animate && !prefersReducedMotion() && n > 1;
+  // Читаем длительность заново на КАЖДЫЙ вызов (не кэшируем при загрузке
+  // страницы) — так смена настройки в панели подхватывается уже следующим
+  // прогоном (см. план задачи «настройки продолжительности»).
+  const duration = currentDrawDuration();
 
   const viewport = el("div", "reel-viewport");
   const pointer = el("div", "reel-pointer");
@@ -1437,7 +1610,18 @@ function renderReel(container, candidates, targetIndex, animate) {
     track.style.transform = `translateX(${tx}px)`;
   };
 
-  if (!doAnimate) { track.style.transition = "none"; settle(); return Promise.resolve(); }
+  if (!doAnimate) {
+    // Состояние покоя (превью метода или финальный кадр под
+    // prefers-reduced-motion) — считаем фокус-масштаб один раз сразу после
+    // расстановки, без перехода (сам факт «центр крупнее» — не анимация, но
+    // ПЕРЕХОД к нему тут не нужен, см. план задачи 6). Глобальное правило
+    // prefers-reduced-motion в конце styles.css и так гасит transition на
+    // .reel-item, лишний branch не нужен.
+    track.style.transition = "none";
+    settle();
+    applyReelFocusScale(viewport);
+    return Promise.resolve();
+  }
 
   return new Promise(resolve => {
     // Стартуем с 0px без анимации, затем на следующем кадре включаем переход
@@ -1446,13 +1630,22 @@ function renderReel(container, candidates, targetIndex, animate) {
     track.style.transition = "none";
     track.style.transform = "translateX(0px)";
     requestAnimationFrame(() => requestAnimationFrame(() => {
-      track.style.transition = "";   // вернуть CSS-transition из styles.css
+      track.style.transition = "";              // вернуть transition-property/timing-function из styles.css
+      track.style.transitionDuration = duration + "s";   // ...но саму длительность — из настроек, не из CSS
       settle();
     }));
+    const stopFocusLoop = startReelFocusLoop(viewport);
     let done = false;
-    const finish = () => { if (done) return; done = true; resolve(); };
+    const finish = () => {
+      if (done) return;
+      done = true;
+      stopFocusLoop();
+      applyReelFocusScale(viewport);   // точный финальный расчёт (rAF-цикл мог отстать на последний кадр)
+      markReelWinner(viewport, landIndex);
+      resolve();
+    };
     track.addEventListener("transitionend", finish, { once: true });
-    setTimeout(finish, 4600);   // подстраховка, если transitionend не пришёл
+    setTimeout(finish, duration * 1000 + 1000);   // подстраховка, если transitionend не пришёл — с запасом под настраиваемую длительность
   });
 }
 
@@ -1553,6 +1746,10 @@ function spinWheelTo(svg, mids, targetIndex) {
     const reduced = prefersReducedMotion();
     const fullSpins = reduced ? 0 : 6;
     const rotation = fullSpins * 360 - mids[targetIndex];
+    // Читаем длительность заново на КАЖДЫЙ прогон (включая каждый раунд
+    // animateElimination) — не кэшируем при загрузке страницы, см. план
+    // задачи «настройки продолжительности».
+    const duration = currentDrawDuration();
 
     if (reduced) { svg.style.transition = "none"; svg.style.transform = `rotate(${rotation}deg)`; return resolve(); }
 
@@ -1560,12 +1757,13 @@ function spinWheelTo(svg, mids, targetIndex) {
     // переход к финальному углу — иначе браузер схлопнёт оба состояния.
     svg.style.transform = "rotate(0deg)";
     requestAnimationFrame(() => requestAnimationFrame(() => {
+      svg.style.transitionDuration = duration + "s";   // из настроек, не из CSS .wheel-wrap svg
       svg.style.transform = `rotate(${rotation}deg)`;
     }));
     let done = false;
     const finish = () => { if (done) return; done = true; resolve(); };
     svg.addEventListener("transitionend", finish, { once: true });
-    setTimeout(finish, 5000);   // подстраховка, если transitionend не пришёл
+    setTimeout(finish, duration * 1000 + 800);   // подстраховка, если transitionend не пришёл — с запасом под настраиваемую длительность
   });
 }
 
@@ -1609,18 +1807,28 @@ function showDrawResult(candidates, resultId) {
   const mv = candidates.find(c => c.kinopoiskId === resultId) || {};
   const roomId = drawState.roomId;
   // Переключатель метода виден весь розыгрыш (выбор метода + сама прокрутка,
-  // см. drawStartBtn.onclick) — прячем его вместе с #drawStage только здесь,
-  // на самом финальном экране результата (см. план задачи 3).
+  // см. drawStartBtn.onclick) — прячем его здесь, на самом финальном экране
+  // результата (см. план задачи 3): выбирать метод заново уже не имеет
+  // смысла, для повторного прогона есть «Крутить ещё раз». #drawStage
+  // (колесо/карусель) ТЕПЕРЬ остаётся на экране — само оно уже остановлено
+  // на результате анимацией выше (см. план задачи «кнопки под
+  // колесом/каруселью»), кнопки результата ложатся под ним.
   $("drawSetup").classList.add("hidden");
-  $("drawStage").classList.add("hidden");
   const box = $("drawResult");
   box.classList.remove("hidden");
   const year = mv.year ? ` (${mv.year})` : "";
+  // «Случайный выбор» уже показывает победителя крупно прямо в самой ленте
+  // (см. reel-item-winner в renderReel/markReelWinner) — отдельная карточка
+  // с постером в #drawResult тут избыточна, оставляем только кнопки. У
+  // колеса и «На выбывание» увеличить сектор победителя нечем — там карточка
+  // с обложкой остаётся, как и раньше (см. план задачи 5).
+  const showCard = drawState.method !== "weighted_random";
   box.innerHTML = `
+    ${showCard ? `
     <div class="result-card">
       ${mv.posterUrl ? `<img src="${esc(mv.posterUrl)}" alt="">` : ""}
       <h2>${esc(mv.title || "")}${esc(year)}</h2>
-    </div>
+    </div>` : ""}
     <div class="row result-actions">
       <button class="btn outlined" id="drawKpBtn">Смотреть на Кинопоиске</button>
       <button class="btn filled" id="drawWatchedBtn">Отметить просмотренным</button>
@@ -1660,11 +1868,15 @@ async function showJoin(code) {
 // показывает сами списки сразу тут (первые PROFILE_PREVIEW_LIMIT штук каждый,
 // см. renderWatchedInto/renderMyListInto ниже — те же функции рендерят и
 // полные #/watched и #/my-list, просто в другой контейнер и без среза).
-// «Показать все» — переход на полную страницу, виден только если элементов
-// больше лимита (иначе все и так уже видны, кнопка избыточна).
+// «Показать все» — переход на полную страницу, виден только если рядов
+// больше 4 — .queue-grid отзывчивая (auto-fill), точный подсчёт рядов
+// зависел бы от текущей ширины экрана; пользователь явно попросил считать
+// по столько же карточек, сколько при обычной для него ширине укладывается
+// в 4 ряда (2 колонки × 4 ряда = 8), поэтому лимит — фиксированное число, не
+// динамический расчёт по фактической раскладке.
 $("serviceProfileBtn").onclick = () => { location.hash = "#/profile"; };
 
-const PROFILE_PREVIEW_LIMIT = 4;
+const PROFILE_PREVIEW_LIMIT = 8;
 
 async function showProfile() {
   showOnly("profileView");
@@ -1675,12 +1887,19 @@ async function showProfile() {
   ]);
   if (watched) {
     $("profileWatchedEmpty").hidden = watched.movies.length > 0;
-    $("profileWatchedMoreBtn").classList.toggle("hidden", watched.movies.length <= PROFILE_PREVIEW_LIMIT);
+    // .hidden-КЛАСС тут не годится: у него та же специфичность (0,0,1,0), что
+    // и у .btn, а .btn объявлен позже в styles.css — при равной специфичности
+    // побеждает последнее правило по каскаду, и display:inline-flex у .btn
+    // перебивал бы display:none (кнопка «Показать все» была видна всегда,
+    // баг). [hidden]{display:none !important} — тот же идиом, что и везде в
+    // этом файле ($("watchedEmpty").hidden = ...), !important гарантированно
+    // выигрывает у любого компонентного класса.
+    $("profileWatchedMoreBtn").hidden = watched.movies.length <= PROFILE_PREVIEW_LIMIT;
     renderWatchedInto($("profileWatchedList"), watched.movies.slice(0, PROFILE_PREVIEW_LIMIT));
   }
   if (myList) {
     $("profileMyListEmpty").hidden = myList.movies.length > 0;
-    $("profileMyListMoreBtn").classList.toggle("hidden", myList.movies.length <= PROFILE_PREVIEW_LIMIT);
+    $("profileMyListMoreBtn").hidden = myList.movies.length <= PROFILE_PREVIEW_LIMIT;
     renderMyListInto($("profileMyListItems"), myList.movies.slice(0, PROFILE_PREVIEW_LIMIT), showProfile);
   }
 }
@@ -1699,19 +1918,18 @@ async function showWatched() {
 // (renderMovieCard): контейнер несёт class="queue-grid" в index.html, а
 // .queue-grid .movie-poster/.movie-info в styles.css уже сами по себе дают
 // крупную обложку и .movie-info-top-раскладку — тут не переопределяется,
-// просто та же разметка, что и у карточки очереди. У «Что мы смотрели»
-// действий нет (список только для чтения), поэтому нет ни .title-actions,
-// ни .movie-card-footer — просто оценка внизу текстового блока.
+// просто та же разметка, что и у карточки очереди. «Смотреть» — в
+// .movie-card-footer (тот же приём, что и у очереди/личного списка), а
+// личная оценка — через renderRatingToggle (цифра, если уже оценено, иначе
+// сразу шкала звёзд); средняя оценка сервиса остаётся отдельной строкой
+// текста рядом, её эта карточка не редактирует.
 function renderWatchedInto(container, items) {
   container.textContent = "";
   for (const it of items) {
     const mv = it.movie;
     const card = el("div", "movie-card");
     const year = mv.year ? ` (${mv.year})` : "";
-    const scoreParts = [
-      it.myScore ? `Моя оценка: ${it.myScore}` : "Без моей оценки",
-      it.avgScore != null ? `средняя ${it.avgScore}${it.ratingCount > 1 ? ` (${it.ratingCount})` : ""}` : null,
-    ].filter(Boolean).join(" · ");
+    const avgText = it.avgScore != null ? `средняя ${it.avgScore}${it.ratingCount > 1 ? ` (${it.ratingCount})` : ""}` : "Средней оценки пока нет";
     card.innerHTML = `
       <div class="movie-card-head">
         ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
@@ -1719,10 +1937,20 @@ function renderWatchedInto(container, items) {
           <div class="movie-info-top">
             <div class="title">${esc(mv.title)}${esc(year)}</div>
             <div class="chip-row">${movieChipsHtml(mv)}</div>
-            <div class="muted sub">${esc(scoreParts)}</div>
+            <div class="score-row">
+              <div data-act="rating"></div>
+              <span class="muted">${esc(avgText)}</span>
+            </div>
+          </div>
+          <div class="movie-card-footer">
+            <button class="btn tonal" data-act="watch">Смотреть</button>
           </div>
         </div>
       </div>`;
+
+    card.querySelector('[data-act="watch"]').onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
+    renderRatingToggle(card.querySelector('[data-act="rating"]'), mv.kinopoiskId, it.myScore);
+
     container.append(card);
   }
 }

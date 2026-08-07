@@ -207,6 +207,13 @@ input[type="text"]{
   width:100%;transition:border-color .15s,border-width .15s;
 }
 input[type="text"]:focus{outline:none;border-color:var(--md-sys-color-primary);border-width:1.5px}
+input[type="number"]{
+  font:inherit;font-size:14px;padding:8px 10px;border-radius:var(--md-sys-shape-corner-s);
+  border:1px solid var(--md-sys-color-outline);background:transparent;color:var(--md-sys-color-on-surface);
+  width:100%;transition:border-color .15s,border-width .15s;
+}
+input[type="number"]:focus{outline:none;border-color:var(--md-sys-color-primary);border-width:1.5px}
+input[type="range"]{flex:1;accent-color:var(--flame-tip);cursor:pointer}
 select{
   font:inherit;font-size:14px;padding:9px 12px;border-radius:var(--md-sys-shape-corner-s);
   border:1px solid var(--md-sys-color-outline);background:var(--md-sys-color-surface-container-lowest);
@@ -425,6 +432,16 @@ select{
    постоянно видимая, не только тултип. min-width гасит дрожание ряда при
    переходе между однозначными и «10». */
 .star-rating-score{margin-left:.35rem;min-width:1.1em}
+
+/* Свёрнутое состояние renderRatingToggle — компактная цифра вместо шкалы
+   на 10 звёзд, когда оценка уже стоит (лента «Что мы смотрели», где шкала
+   на каждой из многих карточек была бы избыточной). */
+.rating-chip{
+  display:inline-flex;align-items:center;gap:.3em;
+  background:transparent;border:0;padding:.2em .5em;border-radius:var(--md-sys-shape-corner-s);
+  color:var(--flame-tip);font:inherit;font-weight:650;cursor:pointer;
+}
+.rating-chip:hover{background:var(--md-sys-color-surface-container)}
 
 /* ===================== ВИТРИНА «ИЗ БАЗЫ» (главная) =====================
    Тот же паттерн сетки, что .trip-grid в Trip/assets/styles.css — карточки
@@ -669,20 +686,47 @@ ul.plain li:last-child{border-bottom:0}
 .draw-start-btn:active::after{opacity:.16}
 .draw-start-btn:disabled{opacity:.6;cursor:default;pointer-events:none;transform:none;box-shadow:var(--e1)}
 
+/* Панель настроек длительности прокрутки — тот же самый .menu-wrap/.menu
+   дропдаун, что и у #roomMenu/#csvMenu (не отдельная модалка, см. план
+   задачи 3), просто с формой внутри вместо .menu-item-кнопок. */
+.draw-method-row{display:flex;align-items:center;gap:.5rem}
+.draw-settings-panel{width:15.5rem;display:flex;flex-direction:column;gap:.8rem;padding:.9rem}
+.draw-settings-row{display:flex;gap:.6rem}
+.draw-settings-field{
+  display:flex;flex-direction:column;gap:.35rem;flex:1;
+  font-size:12px;font-weight:600;color:var(--md-sys-color-on-surface-variant);
+}
+.draw-settings-slider-row{display:flex;align-items:center;gap:.6rem}
+.draw-settings-slider-row input[type="number"]{width:4.4rem;flex:none}
+/* Гасится вместе с #drawMethodRow на время самой прокрутки (см.
+   drawStartBtn.onclick в app.js) — тот же приём, что и .mini-seg.disabled
+   выше, просто через нативный :disabled, а не отдельный класс. */
+#drawSettingsBtn:disabled{opacity:.5;cursor:default;pointer-events:none}
+
 /* Горизонтальная карусель постеров-кандидатов («Случайный выбор») — .reel-track
    едет translateX и замедляется к финалу, останавливаясь ровно под
    .reel-pointer (неподвижная отметка по центру viewport). Один и тот же
    рендер (renderReel в app.js) используется и для живого превью метода в
    состоянии покоя (animate=false), и для самой прокрутки (animate=true) —
    поэтому карточки/разметка ровно те же, см. план задачи 2/3. */
-.reel-viewport{position:relative;overflow:hidden;width:min(40rem,94vw);margin:1.4rem auto 0;padding:.6rem 0}
+/* padding-top/bottom с большим запасом — не только под обычный размер, но
+   и под увеличенный «coverflow»-масштаб (см. REEL_FOCUS_SCALE/REEL_WINNER_SCALE
+   в app.js): transform:scale() не участвует в layout, поэтому auto-высота
+   viewport считается по НЕувеличенному .reel-item, а overflow:hidden должен
+   остаться (иначе видно соседей за краем ленты по горизонтали) — единственный
+   надёжный способ не обрезать увеличенный постер сверху/снизу это just
+   заложить запас в padding заранее, см. план задачи 6. */
+.reel-viewport{position:relative;overflow:hidden;width:min(40rem,94vw);margin:1.4rem auto 0;padding:7rem 0}
 .reel-track{display:flex;align-items:flex-start;will-change:transform;transition:transform 3.2s cubic-bezier(.12,.67,.14,1)}
-.reel-item{flex:none;width:9rem;padding:0 .5rem;text-align:center}
-.reel-item .movie-poster{width:8rem;height:12rem;margin:0 auto}
+.reel-item{flex:none;width:11rem;padding:0 .5rem;text-align:center;transform-origin:center;transition:transform .2s var(--ease-std)}
+.reel-item .movie-poster{width:10rem;height:15rem;margin:0 auto}
 .reel-item .title{
   margin-top:.4rem;font-weight:600;font-size:.82rem;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;
 }
+/* Финальный акцент победителя (markReelWinner в app.js) — выше соседей по
+   z-index, чтобы увеличенный постер не подрезался их плоскими краями. */
+.reel-item.reel-item-winner{position:relative;z-index:2}
 .reel-pointer{
   position:absolute;top:0;bottom:0;left:50%;width:2px;transform:translateX(-1px);
   background:var(--flame-tip);z-index:2;pointer-events:none;
@@ -695,7 +739,7 @@ ul.plain li:last-child{border-bottom:0}
 .reel-pointer::before{top:-.15rem;border-top:.7rem solid var(--flame-tip)}
 .reel-pointer::after{bottom:-.15rem;border-bottom:.7rem solid var(--flame-tip)}
 
-.wheel-wrap{position:relative;width:23rem;max-width:92vw;aspect-ratio:1;margin:1.4rem auto}
+.wheel-wrap{position:relative;width:28rem;max-width:92vw;aspect-ratio:1;margin:1.4rem auto}
 .wheel-wrap svg{width:100%;height:100%;display:block;transition:transform 4.2s cubic-bezier(.12,.67,.14,1)}
 /* Гашение сектора выбывшего кандидата в раунде «На выбывание» — плавно, а не
    рывком, см. animateElimination в app.js. */
