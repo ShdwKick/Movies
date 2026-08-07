@@ -88,8 +88,27 @@
     <button class="btn tonal" id="joinCodeBtn">Найти</button>
   </div>
 
+  <!-- Поиск фильмов прямо на главной, над витриной — тот же принцип, что в
+       браузерных онлайн-кинотеатрах: результаты появляются под строкой
+       поиска по мере ввода и уходят вниз страницы, а не всплывающим окном
+       (в отличие от #globalSearchModalBackdrop в шапке — та осталась,
+       здесь просто ещё один вход к тому же /api/search, см. app.js). Сами
+       строки результата — переиспользованный renderSearchResultRow, тот же
+       компонент, что и в модалке. -->
+  <div id="homeSearchWrap">
+    <div class="search-row">
+      <input type="text" id="homeSearchInput" placeholder="Искать фильмы по названию…">
+      <button class="icon-btn" id="homeSearchClearBtn" title="Очистить" aria-label="Очистить" hidden>
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div id="homeSearchResults" hidden></div>
+  </div>
+
   <!-- Витрина последних закэшированных фильмов (GET /api/movies) — секция
-       скрыта целиком, пока кэш пуст (см. renderCachedMovies в app.js).
+       скрыта целиком, пока кэш пуст (см. renderCachedMovies в app.js), а
+       также временно, пока на главной активен поиск выше (см.
+       homeSearchInput в app.js — вместо неё показываются результаты).
        Без текстового заголовка — только визуальное отделение (border-top на
        самой обёртке, см. #cachedMoviesWrap в styles.css).
        TODO(будущее): разделение витрины по жанрам. -->

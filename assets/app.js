@@ -207,6 +207,13 @@ async function showRooms() {
   showOnly("roomsView");
   state.room = null;
   document.title = "Что смотрим? — мои комнаты";
+  // Поиск на главной сбрасывается при каждом заходе на страницу — иначе
+  // после ухода на другой экран и возврата сюда осталась бы висеть чужая
+  // сессия поиска, а не свежая витрина.
+  $("homeSearchInput").value = "";
+  $("homeSearchClearBtn").hidden = true;
+  $("homeSearchResults").hidden = true;
+  $("homeSearchResults").textContent = "";
   const data = await act(() => api("/rooms"));
   if (!data) return;
   state.me = data.me;
@@ -268,6 +275,57 @@ $("cachedNextBtn").onclick = () => {
   showcaseState.offset += showcaseState.limit;
   renderCachedMovies(state.rooms);
 };
+
+// Поиск фильмов прямо на главной, над витриной (#homeSearchWrap в index.html)
+// — тот же /api/search и тот же renderSearchResultRow, что и у модалки
+// #globalSearchModalBackdrop в шапке (см. runGlobalSearch/renderGlobalSearchResults
+// ниже по файлу), просто без модалки: результаты появляются под строкой
+// поиска и уходят вниз страницы по мере ввода (принцип как в браузерных
+// онлайн-кинотеатрах), а витрина «Из базы» на это время прячется — иначе на
+// экране были бы одновременно два конкурирующих списка фильмов. Пустая
+// строка возвращает как было — просто перерисовываем витрину заново
+// (renderCachedMovies сама решает, показывать её или нет, ничего вручную не
+// восстанавливаем).
+let homeSearchDebounce = null;
+$("homeSearchInput").addEventListener("input", () => {
+  $("homeSearchClearBtn").hidden = !$("homeSearchInput").value;
+  clearTimeout(homeSearchDebounce);
+  homeSearchDebounce = setTimeout(runHomeSearch, 300);
+});
+$("homeSearchClearBtn").onclick = () => {
+  $("homeSearchInput").value = "";
+  $("homeSearchClearBtn").hidden = true;
+  runHomeSearch();
+};
+
+async function runHomeSearch() {
+  const q = $("homeSearchInput").value.trim();
+  const results = $("homeSearchResults");
+  clearTimeout(homeSearchDebounce);
+  if (!q) {
+    results.hidden = true;
+    results.textContent = "";
+    renderCachedMovies(state.rooms);
+    return;
+  }
+  const data = await act(() => api("/search?q=" + encodeURIComponent(q)));
+  if (!data) return;
+  // Запрос мог устареть, пока летел (строку успели стереть/поменять) —
+  // не подсовываем результат уже не тому вводу.
+  if ($("homeSearchInput").value.trim() !== q) return;
+  const roomsData = await act(() => api("/rooms"));
+  renderHomeSearchResults(data.movies, roomsData ? roomsData.rooms : []);
+}
+
+function renderHomeSearchResults(movies, rooms) {
+  $("cachedMoviesWrap").hidden = true;
+  const box = $("homeSearchResults");
+  box.hidden = false;
+  box.textContent = "";
+  openCardMenu = null; // старые строки со своими меню «Добавить в…» уходят целиком
+  if (!movies.length) { box.append(el("p", "muted", "Ничего не нашлось.")); return; }
+  for (const mv of movies) box.append(renderSearchResultRow(mv, rooms));
+}
 
 // Иконка «Смотреть» на плитке витрины — тот же плей-треугольник, что и
 // текстовая кнопка «Смотреть» карточки очереди (renderMovieCard), просто в
