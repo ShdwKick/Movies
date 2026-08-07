@@ -543,48 +543,34 @@ function renderMovieResults(movies) {
   for (const mv of movies) box.append(renderMovieResultCard(mv));
 }
 
-/** Переиспользуемый блок «добавить в комнату»: <select> со списком комнат
-    пользователя + кнопка, либо подсказка «Сначала создайте комнату», если
-    комнат нет вовсе (см. план задачи 2). Один и тот же компонент используется
-    в мини-пикере комнаты из личного списка (openRoomPicker), в
-    renderAddTargetActions (модалка «Фильм», строка результата глобального
-    поиска через renderAddToMenu) и в самом renderAddToMenu (плитка витрины).
-    onAdded(roomId) зовётся ПОСЛЕ успешного добавления — вызывающий код
-    решает, закрывать ли модалку и как известить пользователя. */
+/** Переиспользуемый блок «добавить в комнату» — список комнат пользователя,
+    клик по названию сразу добавляет (без отдельного select+кнопки
+    «Добавить» — раньше выбор и подтверждение были двумя шагами, теперь один),
+    либо подсказка «Сначала создайте комнату», если комнат нет вовсе. Список
+    ограничен по высоте (.room-pick-list в styles.css — примерно 5 строк,
+    остальное через прокрутку), чтобы не разъезжаться на пол-экрана при
+    большом числе комнат. Один и тот же компонент используется в пункте
+    «Добавить в комнату» меню карточки личного списка (renderMyListInto) и
+    меню renderAddToMenu (плитка витрины, строка результата глобального
+    поиска, модалка «Фильм»). onAdded(roomId) зовётся ПОСЛЕ успешного
+    добавления — вызывающий код решает, как известить пользователя. */
 function renderRoomPicker(container, kinopoiskId, rooms, onAdded) {
   container.textContent = "";
   if (!rooms.length) {
     container.append(el("span", "muted", "Сначала создайте комнату"));
     return;
   }
-  const select = el("select");
+  const list = el("div", "room-pick-list");
   for (const r of rooms) {
-    const opt = el("option", null, r.title);
-    opt.value = r.id;
-    select.append(opt);
+    const btn = el("button", "menu-item", r.title);
+    btn.type = "button";
+    btn.onclick = () => act(async () => {
+      await api(`/rooms/${r.id}/movies`, { method: "POST", body: { kinopoiskId } });
+      if (onAdded) onAdded(r.id);
+    }, "Фильм добавлен в комнату");
+    list.append(btn);
   }
-  const addBtn = el("button", "btn tonal sm", "Добавить в комнату");
-  addBtn.onclick = () => act(async () => {
-    const roomId = select.value;
-    await api(`/rooms/${roomId}/movies`, { method: "POST", body: { kinopoiskId } });
-    if (onAdded) onAdded(roomId);
-  }, "Фильм добавлен в комнату");
-  container.append(select, addBtn);
-}
-
-/** Блок выбора цели — renderRoomPicker + отдельная кнопка «В личный список»
-    (POST /my-list). ВСЕГДА-видимый блок, уместен там, где место не жалко:
-    блок действий в модалке «Фильм» (renderMovieInfoModal) и содержимое
-    меню «Добавить в…» после раскрытия (renderAddToMenu, для плитки витрины
-    и строки результата глобального поиска — там сам блок под меню, см.
-    ниже). */
-function renderAddTargetActions(container, kinopoiskId, rooms) {
-  renderRoomPicker(container, kinopoiskId, rooms);
-  const listBtn = el("button", "btn tonal sm", "В личный список");
-  listBtn.onclick = () => act(async () => {
-    await api("/my-list", { method: "POST", body: { kinopoiskId } });
-  }, "Добавлено в личный список");
-  container.append(listBtn);
+  container.append(list);
 }
 
 /** Строка результата глобального поиска (шапка, любая комната) — та же
@@ -811,35 +797,65 @@ document.addEventListener("click", e => {
   if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) closeCardMenu();
 });
 
-/** Меню «Добавить в…» — компактная замена ВСЕГДА-видимого renderAddTargetActions
+/** Меню «Добавить в…» — компактная замена ВСЕГДА-видимого renderRoomPicker
     для мест, где место ЖАЛКО (узкая плитка/список результатов): плитка
-    витрины (renderMovieTile) и строка результата глобального поиска
-    (renderSearchResultRow). Кнопка-триггер
-    (три точки) + .menu с ОДНИМ пунктом «Добавить в…» — тот же разметочный
-    паттерн (data-act="cardMenuBtn"/"cardMenu"), что и меню действий карточки
+    витрины (renderMovieTile), строка результата глобального поиска
+    (renderSearchResultRow) и модалка «Фильм» (renderMovieInfoModal).
+    Кнопка-триггер (три точки) + .menu с ДВУМЯ пунктами верхнего уровня —
+    «Добавить в комнату» и «В личный список» — тот же разметочный паттерн
+    (data-act="cardMenuBtn"/"cardMenu"), что и меню действий карточки
     очереди/истории выше, поэтому открытие/закрытие переиспользует ТОТ ЖЕ
     механизм (bindMovieCardMenu/closeCardMenu/module-level openCardMenu) — не
-    отдельный третий. Клик по пункту «Добавить в…» меню НЕ закрывает, а
-    подменяет содержимое того же .menu на renderAddTargetActions (select
-    комнат + «В личный список»). wrap.onclick(stopPropagation) — чтобы клики
-    внутри меню (включая уже подставленный renderAddTargetActions) не
-    всплывали до кликабельных родителей (плитка витрины целиком открывает
-    модалку по клику). */
+    отдельный третий. «В личный список» — сразу выполняет действие (POST
+    /my-list), «Добавить в комнату» подменяет содержимое ТОГО ЖЕ .menu на
+    renderRoomPicker (select комнат + кнопка) — сам пикер, без второй кнопки
+    личного списка, она теперь отдельным пунктом уровнем выше.
+
+    Баг, который тут чинится: .menu — один и тот же DOM-узел на всё время
+    жизни меню, а его содержимое ПОДМЕНЯЕТСЯ (menu.innerHTML = ...) при
+    выборе «Добавить в комнату». closeCardMenu() только прячет узел
+    (menu.hidden = true), содержимое не сбрасывает — без явного сброса
+    следующее открытие того же меню показывало бы застрявший пикер комнат
+    вместо исходных двух пунктов. Чиним оборачиванием onclick, который уже
+    повесил bindMovieCardMenu: при переходе «было закрыто → стало открыто»
+    (не при закрытии и не при повторном клике по уже открытому) перерисовываем
+    .menu заново тем же initialHtml. wrap.onclick(stopPropagation) — чтобы
+    клики внутри меню не всплывали до кликабельных родителей (плитка витрины
+    целиком открывает модалку по клику). */
 function renderAddToMenu(kinopoiskId, rooms) {
   const wrap = el("div", "menu-wrap");
+  const menuInitialHtml = `
+    <button class="menu-item" data-act="addRoom">Добавить в комнату</button>
+    <button class="menu-item" data-act="addList">В личный список</button>`;
   wrap.innerHTML = `
     <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Добавить в…" aria-label="Добавить в…" aria-haspopup="true" aria-expanded="false">
       <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
     </button>
-    <div class="menu" data-act="cardMenu" hidden>
-      <button class="menu-item" data-act="addTo">Добавить в…</button>
-    </div>`;
+    <div class="menu" data-act="cardMenu" hidden>${menuInitialHtml}</div>`;
   wrap.onclick = e => e.stopPropagation();
+
+  const menu = wrap.querySelector('[data-act="cardMenu"]');
+  function bindMenuItems() {
+    menu.querySelector('[data-act="addRoom"]').onclick = () => {
+      menu.innerHTML = "";
+      renderRoomPicker(menu, kinopoiskId, rooms);
+    };
+    menu.querySelector('[data-act="addList"]').onclick = () => act(async () => {
+      await api("/my-list", { method: "POST", body: { kinopoiskId } });
+    }, "Добавлено в личный список");
+  }
+  bindMenuItems();
+
   bindMovieCardMenu(wrap);
-  wrap.querySelector('[data-act="addTo"]').onclick = () => {
-    const menu = wrap.querySelector('[data-act="cardMenu"]');
-    menu.innerHTML = "";
-    renderAddTargetActions(menu, kinopoiskId, rooms);
+  const btn = wrap.querySelector('[data-act="cardMenuBtn"]');
+  const toggle = btn.onclick;
+  btn.onclick = e => {
+    const wasHidden = menu.hidden;
+    toggle(e);
+    if (wasHidden && !menu.hidden) {
+      menu.innerHTML = menuInitialHtml;
+      bindMenuItems();
+    }
   };
   return wrap;
 }
@@ -1221,22 +1237,6 @@ function renderGlobalSearchResults(movies, rooms) {
   openCardMenu = null; // старые строки со своими меню «Добавить в…» уходят целиком
   if (!movies.length) { box.append(el("p", "muted", "Ничего не нашлось.")); return; }
   for (const mv of movies) box.append(renderSearchResultRow(mv, rooms));
-}
-
-// ───────────────────────── мини-пикер комнаты (из личного списка) ─────────────────────────
-// Тот же renderRoomPicker, что и в глобальном поиске, но в отдельной модалке:
-// на экране «Мой список» комната заранее неизвестна, а inline-строка выбора
-// там неуместна (карточка уже итак насыщена действиями).
-bindModal("roomPickModalBackdrop", null, "roomPickModalClose");
-async function openRoomPicker(kinopoiskId) {
-  openModal("roomPickModalBackdrop");
-  const body = $("roomPickBody");
-  body.textContent = "";
-  body.append(el("p", "muted", "Загрузка…"));
-  const data = await act(() => api("/rooms"));
-  body.textContent = "";
-  if (!data) return;
-  renderRoomPicker(body, kinopoiskId, data.rooms, () => closeModal("roomPickModalBackdrop"));
 }
 
 $("renameRoomBtn").onclick = () => act(async () => {
@@ -1655,17 +1655,34 @@ async function showJoin(code) {
 
 // ───────────────────────── профиль сервиса (хаб) ─────────────────────────
 // Личные фильмовые данные ВНУТРИ этого сервиса (не аккаунт BurningHouse) —
-// раньше две невзрачные текстовые ссылки висели прямо на #roomsView, теперь
-// иконка #serviceProfileBtn в шапке ведёт на #/profile, а сама страница
-// только перенаправляет на уже существующие #/watched и #/my-list (см. план
-// задачи 2) — их рендеринг не дублируем.
+// иконка #serviceProfileBtn в шапке ведёт на #/profile. Раньше страница была
+// чистым хабом с двумя кнопками-вкладками на #/watched и #/my-list, теперь
+// показывает сами списки сразу тут (первые PROFILE_PREVIEW_LIMIT штук каждый,
+// см. renderWatchedInto/renderMyListInto ниже — те же функции рендерят и
+// полные #/watched и #/my-list, просто в другой контейнер и без среза).
+// «Показать все» — переход на полную страницу, виден только если элементов
+// больше лимита (иначе все и так уже видны, кнопка избыточна).
 $("serviceProfileBtn").onclick = () => { location.hash = "#/profile"; };
-$("profileWatchedBtn").onclick = () => { location.hash = "#/watched"; };
-$("profileMyListBtn").onclick = () => { location.hash = "#/my-list"; };
+
+const PROFILE_PREVIEW_LIMIT = 4;
 
 async function showProfile() {
   showOnly("profileView");
   document.title = "Что смотрим? — мои фильмы";
+  const [watched, myList] = await Promise.all([
+    act(() => api("/watched")),
+    act(() => api("/my-list")),
+  ]);
+  if (watched) {
+    $("profileWatchedEmpty").hidden = watched.movies.length > 0;
+    $("profileWatchedMoreBtn").classList.toggle("hidden", watched.movies.length <= PROFILE_PREVIEW_LIMIT);
+    renderWatchedInto($("profileWatchedList"), watched.movies.slice(0, PROFILE_PREVIEW_LIMIT));
+  }
+  if (myList) {
+    $("profileMyListEmpty").hidden = myList.movies.length > 0;
+    $("profileMyListMoreBtn").classList.toggle("hidden", myList.movies.length <= PROFILE_PREVIEW_LIMIT);
+    renderMyListInto($("profileMyListItems"), myList.movies.slice(0, PROFILE_PREVIEW_LIMIT), showProfile);
+  }
 }
 
 // ───────────────────────── что мы смотрели ─────────────────────────
@@ -1674,13 +1691,19 @@ async function showWatched() {
   document.title = "Что смотрим? — что мы смотрели";
   const data = await act(() => api("/watched"));
   if (!data) return;
-  renderWatched(data.movies);
+  $("watchedEmpty").hidden = data.movies.length > 0;
+  renderWatchedInto($("watchedList"), data.movies);
 }
 
-function renderWatched(items) {
-  $("watchedEmpty").hidden = items.length > 0;
-  const list = $("watchedList");
-  list.textContent = "";
+// Блоки — тот же .queue-grid + .movie-card, что и очередь комнаты
+// (renderMovieCard): контейнер несёт class="queue-grid" в index.html, а
+// .queue-grid .movie-poster/.movie-info в styles.css уже сами по себе дают
+// крупную обложку и .movie-info-top-раскладку — тут не переопределяется,
+// просто та же разметка, что и у карточки очереди. У «Что мы смотрели»
+// действий нет (список только для чтения), поэтому нет ни .title-actions,
+// ни .movie-card-footer — просто оценка внизу текстового блока.
+function renderWatchedInto(container, items) {
+  container.textContent = "";
   for (const it of items) {
     const mv = it.movie;
     const card = el("div", "movie-card");
@@ -1693,56 +1716,122 @@ function renderWatched(items) {
       <div class="movie-card-head">
         ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
         <div class="movie-info">
-          <div class="title">${esc(mv.title)}${esc(year)}</div>
-          <div class="chip-row">${movieChipsHtml(mv)}</div>
-          <div class="muted sub">${esc(scoreParts)}</div>
+          <div class="movie-info-top">
+            <div class="title">${esc(mv.title)}${esc(year)}</div>
+            <div class="chip-row">${movieChipsHtml(mv)}</div>
+            <div class="muted sub">${esc(scoreParts)}</div>
+          </div>
         </div>
       </div>`;
-    list.append(card);
+    container.append(card);
   }
 }
 
 // ───────────────────────── личный список на просмотр ─────────────────────────
 // Глобально, без привязки к комнате (см. план задачи 1) — GET/POST/DELETE
 // /api/my-list. Добавляют сюда через глобальный поиск в шапке (см.
-// renderSearchResultRow выше); на этом экране можно только убрать фильм или
-// закинуть его в конкретную комнату через мини-пикер (openRoomPicker).
+// renderSearchResultRow выше); открыть на Кинопоиске, убрать из списка или
+// закинуть в конкретную комнату — всё через саму карточку (renderMyListInto).
 async function showMyList() {
   showOnly("myListView");
   document.title = "Что смотрим? — мой список";
   const data = await act(() => api("/my-list"));
   if (!data) return;
-  renderMyList(data.movies);
+  $("myListEmpty").hidden = data.movies.length > 0;
+  renderMyListInto($("myListItems"), data.movies, showMyList);
 }
 
-function renderMyList(items) {
-  $("myListEmpty").hidden = items.length > 0;
-  const list = $("myListItems");
-  list.textContent = "";
+/** onChange зовётся после «Убрать из списка» — на полной странице #/my-list
+    это showMyList (перечитать список), на превью #/profile — showProfile
+    (иначе после удаления в превью карточка исчезла бы, а «Показать все»
+    осталась бы в устаревшем состоянии, посчитанном по старому total).
+    Разметка — та же, что у карточки очереди (renderMovieCard): «Смотреть» —
+    в .movie-card-footer (тот же приём, что и у очереди — использует
+    освободившееся под высокой обложкой место), а «Добавить в комнату»/
+    «Убрать из списка» — оба в «…»-меню в углу (title-actions), а не
+    отдельными кнопками рядом. «Добавить в комнату» ведёт себя как в
+    renderAddToMenu: клик подгружает комнаты и подменяет содержимое ТОГО ЖЕ
+    .menu на renderRoomPicker (список, клик по названию сразу добавляет) —
+    и по тем же причинам, что и там, при повторном открытии меню содержимое
+    сбрасывается к исходным двум пунктам (тот же приём оборачивания onclick,
+    что бросается в глаза при чтении renderAddToMenu — иначе повторное
+    открытие показывало бы застрявший список комнат). */
+function renderMyListInto(container, items, onChange) {
+  container.textContent = "";
   for (const it of items) {
     const mv = it.movie;
     const card = el("div", "movie-card");
     const year = mv.year ? ` (${mv.year})` : "";
+    const menuInitialHtml = `
+      <button class="menu-item" data-act="addRoom">Добавить в комнату</button>
+      <button class="menu-item danger" data-act="remove">Убрать из списка</button>`;
     card.innerHTML = `
-      <div class="movie-card-head">
-        ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
-        <div class="movie-info">
-          <div class="title">${esc(mv.title)}${esc(year)}</div>
-          <div class="chip-row">${movieChipsHtml(mv)}</div>
+      <div class="title-row">
+        <div class="movie-card-head">
+          ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
+          <div class="movie-info">
+            <div class="movie-info-top">
+              <div class="title">${esc(mv.title)}${esc(year)}</div>
+              <div class="chip-row">${movieChipsHtml(mv)}</div>
+            </div>
+            <div class="movie-card-footer">
+              <button class="btn tonal" data-act="watch">Смотреть</button>
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="row">
-        <button class="btn tonal" data-act="pick">Добавить в комнату</button>
-        <button class="btn outlined danger" data-act="remove">Убрать из списка</button>
+        <div class="title-actions">
+          <div class="menu-wrap">
+            <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Действия с фильмом" aria-label="Действия с фильмом" aria-haspopup="true" aria-expanded="false">
+              <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
+            </button>
+            <div class="menu" data-act="cardMenu" hidden>${menuInitialHtml}</div>
+          </div>
+        </div>
       </div>`;
 
-    card.querySelector('[data-act="pick"]').onclick = () => openRoomPicker(mv.kinopoiskId);
-    card.querySelector('[data-act="remove"]').onclick = () => act(async () => {
-      await api(`/my-list/${mv.kinopoiskId}`, { method: "DELETE" });
-      await showMyList();
-    }, "Убрано из списка");
+    card.querySelector('[data-act="watch"]').onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
 
-    list.append(card);
+    // «Добавить в комнату» переписывает menu.innerHTML прямо в обработчике
+    // клика (сначала на «Загрузка…», потом на сам пикер) — старая кнопка,
+    // на которую кликнули, из-за этого отсоединяется от DOM ДО того, как
+    // клик долетит по всплытию до общего document-обработчика «клик снаружи
+    // закрывает меню» (bindMovieCardMenu выше по файлу), и menu.contains(e.target)
+    // для уже отсоединённой кнопки возвращает false — меню закрывалось бы
+    // само на себе тем же кликом. stopPropagation на menu-wrap (тот же
+    // приём, что и в renderAddToMenu) не даёт клику вообще доехать до
+    // document — общий обработчик такие клики просто не видит.
+    card.querySelector('.menu-wrap').onclick = e => e.stopPropagation();
+
+    const menu = card.querySelector('[data-act="cardMenu"]');
+    function bindMenuItems() {
+      menu.querySelector('[data-act="addRoom"]').onclick = async () => {
+        menu.innerHTML = '<p class="muted" style="padding:.5em .8em">Загрузка…</p>';
+        const data = await act(() => api("/rooms"));
+        if (!data || menu.hidden) return;   // закрыли меню, пока список комнат летел
+        menu.innerHTML = "";
+        renderRoomPicker(menu, mv.kinopoiskId, data.rooms);
+      };
+      menu.querySelector('[data-act="remove"]').onclick = () => act(async () => {
+        closeCardMenu();
+        await api(`/my-list/${mv.kinopoiskId}`, { method: "DELETE" });
+        await onChange();
+      }, "Убрано из списка");
+    }
+    bindMenuItems();
+
+    bindMovieCardMenu(card);
+    const menuBtn = card.querySelector('[data-act="cardMenuBtn"]');
+    const toggle = menuBtn.onclick;
+    menuBtn.onclick = e => {
+      const wasHidden = menu.hidden;
+      toggle(e);
+      if (wasHidden && !menu.hidden) {
+        menu.innerHTML = menuInitialHtml;
+        bindMenuItems();
+      }
+    };
+
+    container.append(card);
   }
 }
 

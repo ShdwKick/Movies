@@ -589,6 +589,13 @@ select{
 }
 .menu-user b{font-weight:650}
 
+/* Список комнат в renderRoomPicker — те же .menu-item, что и в любом другом
+   меню, просто кликабельны напрямую (клик = добавить, без отдельного
+   select+кнопки). max-height — примерно 5 строк (.menu-item ~2.1rem с
+   паддингом .6em/.8em при font-size:14px), дальше прокрутка — иначе список
+   комнат мог бы растянуть меню/модалку на пол-экрана. */
+.room-pick-list{max-height:11.8rem;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--md-sys-color-outline-variant) transparent}
+
 /* ===================== МОДАЛКИ ===================== */
 .modal-backdrop{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.5);
   display:flex;align-items:center;justify-content:center;padding:1.2rem}

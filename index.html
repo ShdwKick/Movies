@@ -115,20 +115,29 @@
 </section>
 
 <!-- ===================== ПРОФИЛЬ СЕРВИСА (личные фильмовые данные) =====================
-     Хаб-страница: сама ничего не рендерит, только ведёт на уже существующие
-     #/watched и #/my-list через location.hash (см. план задачи 2) — их
-     внутренний рендеринг не трогаем. -->
+     Хаб-страница: раньше вела на #/watched и #/my-list двумя кнопками-вкладками,
+     теперь показывает сами списки прямо тут (первые несколько штук — см.
+     PROFILE_PREVIEW_LIMIT в app.js), с кнопкой «Показать все» на переход к
+     полной странице, если элементов больше лимита. Полные #/watched и
+     #/my-list никуда не делись — на них по-прежнему можно попасть по этой
+     кнопке или напрямую по ссылке. -->
 <section id="profileView" hidden>
   <a class="backlink" href="#/">← Все комнаты</a>
   <h1>Мои фильмы</h1>
-  <button class="card" id="profileWatchedBtn">
-    <div class="title">Что мы смотрели →</div>
-    <div class="sub muted">Личная лента всего просмотренного</div>
-  </button>
-  <button class="card" id="profileMyListBtn">
-    <div class="title">Мой список →</div>
-    <div class="sub muted">Фильмы для будущего просмотра, ещё не привязанные к комнате</div>
-  </button>
+
+  <div class="title-row">
+    <h2>Что мы смотрели</h2>
+    <a class="btn tonal sm hidden" id="profileWatchedMoreBtn" href="#/watched">Показать все</a>
+  </div>
+  <p class="muted" id="profileWatchedEmpty">Пока ничего не отмечено просмотренным.</p>
+  <div class="queue-grid" id="profileWatchedList"></div>
+
+  <div class="title-row">
+    <h2>Мой список</h2>
+    <a class="btn tonal sm hidden" id="profileMyListMoreBtn" href="#/my-list">Показать все</a>
+  </div>
+  <p class="muted" id="profileMyListEmpty">Список пуст — добавляйте фильмы через поиск в шапке.</p>
+  <div class="queue-grid" id="profileMyListItems"></div>
 </section>
 
 <!-- ===================== ОДНА КОМНАТА ===================== -->
@@ -240,19 +249,6 @@
   </div>
 </div>
 
-<!-- ===================== МОДАЛКА: ДОБАВИТЬ В КОМНАТУ (мини-пикер из личного списка) ===================== -->
-<div class="modal-backdrop hidden" id="roomPickModalBackdrop">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="roomPickModalTitle">
-    <div class="modal-head">
-      <h2 id="roomPickModalTitle">Добавить в комнату</h2>
-      <button class="icon-btn" id="roomPickModalClose" aria-label="Закрыть">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
-    </div>
-    <div id="roomPickBody"></div>
-  </div>
-</div>
-
 <!-- ===================== МОДАЛКА: ФИЛЬМ (карточка витрины «Из базы») =====================
      Один и тот же DOM-узел переиспользуется для любого фильма: renderMovieInfoModal()
      каждый раз перерисовывает #movieInfoModalBody целиком, новых модалок/id не плодим. -->
@@ -299,7 +295,7 @@
   <a class="backlink" href="#/">← Все комнаты</a>
   <h1>Что мы смотрели</h1>
   <p class="muted" id="watchedEmpty">Пока ничего не отмечено просмотренным.</p>
-  <div id="watchedList"></div>
+  <div class="queue-grid" id="watchedList"></div>
 </section>
 
 <!-- ===================== МОЙ СПИСОК (без привязки к комнате) ===================== -->
@@ -307,7 +303,7 @@
   <a class="backlink" href="#/">← Все комнаты</a>
   <h1>Мой список</h1>
   <p class="muted" id="myListEmpty">Список пуст — добавляйте фильмы через поиск в шапке.</p>
-  <div id="myListItems"></div>
+  <div class="queue-grid" id="myListItems"></div>
 </section>
 
 <!-- ===================== ПРИГЛАШЕНИЕ ===================== -->
