@@ -450,10 +450,16 @@ select{
    вместо grid-gap). */
 .movie-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(12.5rem,1fr));margin-top:10px}
 
-/* Обёртка витрины «Из базы» (главная) — раньше был текстовый <h2>, теперь
-   только визуальный разделитель от остального контента экрана (список
-   комнат/поиск по коду выше). TODO(будущее): разделение витрины по жанрам. */
-#cachedMoviesWrap{margin-top:1.6rem;padding-top:1.2rem;border-top:1px solid var(--md-sys-color-outline-variant)}
+/* Разделитель от блоков про комнаты (список/код приглашения выше) — раньше
+   стоял на #cachedMoviesWrap, но #homeSearchWrap (поиск на главной) вставал
+   МЕЖДУ ними без какого-либо отступа и визуально читался как продолжение
+   комнатных блоков, а не как часть поиска фильмов под ним (см. план задачи
+   «поиск на главной»). Разделитель — на #homeSearchWrap, у #cachedMoviesWrap
+   остаётся только отступ сверху, без второй линии (когда поиск пуст и
+   витрина показана прямо под строкой поиска, две границы подряд смотрелись
+   бы избыточно). */
+#homeSearchWrap{margin-top:1.6rem;padding-top:1.2rem;border-top:1px solid var(--md-sys-color-outline-variant)}
+#cachedMoviesWrap{margin-top:1.2rem}
 
 /* Панель сортировки над плитками (#cachedSortSelect) — select уже стилизован
    общим правилом select{} выше в файле, тут только выравнивание строки. */
