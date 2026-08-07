@@ -1552,60 +1552,52 @@ const REEL_LAPS = 5;
 const PREVIEW_LEAD_LAPS = 2;
 const TRAIL_LAPS = 2;
 
-// «Coverflow»-эффект (см. план задачи «фокус-эффект карусели»): элемент под
-// неподвижным .reel-pointer крупнее соседей — и в покое (превью метода), и
-// живьём во время самой прокрутки. REEL_FOCUS_SCALE — масштаб «просто
-// центрального» элемента (в любой момент, включая покой), REEL_WINNER_SCALE
-// — отдельный, ещё более крупный акцент СВЕРХ этого, но только у победителя
-// ПОСЛЕ приземления ленты (applyReelFocusScale/markReelWinner ниже).
-const REEL_FOCUS_SCALE = 1.35;
-const REEL_WINNER_SCALE = 1.7;
+// «Coverflow»-эффект, версия 2 (см. фидбек: раньше был плавный градиент по
+// нескольким соседним элементам + ОТДЕЛЬНЫЙ ещё более крупный акцент у
+// победителя после приземления — пользователь явно попросил ровно ОДНО
+// состояние: крупнее только тот элемент, что СЕЙЧАС на линии .reel-pointer,
+// ничего сверх этого отдельно не увеличиваем). REEL_FOCUS_SCALE — масштаб
+// этого единственного элемента, один и тот же и во время прокрутки (кто
+// сейчас пересекает линию), и в покое (превью метода/финальный кадр — тот,
+// кто на линии, автоматически и есть победитель, settle() как раз и ставит
+// его туда, отдельно помечать не нужно).
+const REEL_FOCUS_SCALE = 1.5;
 
-/** Масштабирует каждый .reel-item внутри viewport по расстоянию его центра
-    до центра viewport (там, где неподвижный .reel-pointer) — линейно от
-    REEL_FOCUS_SCALE в центре до 1 на расстоянии одной ширины элемента и
-    дальше. Дёргается и один раз в покое (после settle(), см. ниже), и на
-    каждом кадре во время прокрутки (см. startReelFocusLoop) — сам расчёт
-    один и тот же, оба места просто по-разному его вызывают. */
+/** Находит .reel-item, чей центр СЕЙЧАС ближе всего к центру viewport (там,
+    где неподвижный .reel-pointer), и увеличивает ТОЛЬКО его — у остальных
+    масштаб сбрасывается в обычный. Не градиент по соседям: либо элемент
+    точно на линии (в пределах половины своей ширины от центра), либо нет.
+    В моменте между двумя элементами (на полпути прокрутки) может не быть ни
+    одного «на линии» — это ожидаемо. Дёргается и один раз в покое (после
+    settle(), см. ниже), и на каждом кадре во время прокрутки (см.
+    startReelFocusLoop) — сам расчёт один и тот же, оба места просто
+    по-разному его вызывают. */
 function applyReelFocusScale(viewport) {
   const items = viewport.querySelectorAll(".reel-item");
   if (!items.length) return;
   const vpRect = viewport.getBoundingClientRect();
   const centerX = vpRect.left + vpRect.width / 2;
   const itemW = items[0].getBoundingClientRect().width || 1;
+  let closest = null, closestDist = Infinity;
   for (const item of items) {
     const r = item.getBoundingClientRect();
     const dist = Math.abs(r.left + r.width / 2 - centerX);
-    const t = Math.min(1, dist / itemW);
-    const scale = REEL_FOCUS_SCALE - (REEL_FOCUS_SCALE - 1) * t;
-    item.style.transform = `scale(${scale.toFixed(3)})`;
+    if (dist < closestDist) { closestDist = dist; closest = item; }
   }
+  const onLine = closest && closestDist < itemW / 2;
+  for (const item of items) item.classList.toggle("reel-item-focused", item === closest && onLine);
 }
 
 /** Стартует rAF-цикл, непрерывно пересчитывающий applyReelFocusScale, пока
-    едет лента (без этого масштаб центра менялся бы скачком только в конце —
-    см. план задачи 6). Возвращает stop() — renderReel вызывает её в finish(),
-    когда прокрутка (transitionend/таймаут-подстраховка) завершилась. */
+    едет лента (без этого элемент «на линии» менялся бы скачком только в
+    конце). Возвращает stop() — renderReel вызывает её в finish(), когда
+    прокрутка (transitionend/таймаут-подстраховка) завершилась. */
 function startReelFocusLoop(viewport) {
   let raf = requestAnimationFrame(function tick() {
     applyReelFocusScale(viewport);
     raf = requestAnimationFrame(tick);
   });
   return () => cancelAnimationFrame(raf);
-}
-
-/** Финальный акцент победителя: элемент под индексом landIndex (тот, что
-    приземлился под указателем) получает ЕЩЁ больший масштаб, чем просто
-    «центральный», — плавный переход обеспечивает CSS-transition на
-    .reel-item (см. styles.css), под prefers-reduced-motion она гасится
-    глобальным правилом в конце файла, сам факт «победитель крупнее» — нет
-    (см. план: это не движение, а состояние). */
-function markReelWinner(viewport, landIndex) {
-  const items = viewport.querySelectorAll(".reel-item");
-  const winner = items[landIndex];
-  if (!winner) return;
-  winner.classList.add("reel-item-winner");
-  winner.style.transform = `scale(${REEL_WINNER_SCALE})`;
 }
 
 /** Горизонтальная карусель постеров-кандидатов: строит .reel-track из
@@ -1698,8 +1690,7 @@ function renderReel(container, candidates, targetIndex, animate) {
       if (done) return;
       done = true;
       stopFocusLoop();
-      applyReelFocusScale(viewport);   // точный финальный расчёт (rAF-цикл мог отстать на последний кадр)
-      markReelWinner(viewport, landIndex);
+      applyReelFocusScale(viewport);   // точный финальный расчёт (rAF-цикл мог отстать на последний кадр) — тот, кто на линии, и есть победитель, settle() уже поставил его туда
       resolve();
     };
     track.addEventListener("transitionend", finish, { once: true });
@@ -1836,28 +1827,28 @@ function animateWheel(container, candidates, resultId) {
     того же renderWheelSvg/spinWheelTo, что и обычное колесо, но целится не в
     результат, а в выбывающего кандидата ЭТОГО раунда; после остановки его
     сектор гасится (opacity), короткая пауза, чтобы можно было уследить, кто
-    выбыл, — и колесо пересобирается уже без него для следующего раунда.
-    Порядок и состав раундов сервер уже зафиксировал, фронт их не выбирает,
-    только визуализирует. При prefers-reduced-motion раунды не проигрываются
-    — колесо сразу встаёт на итоговый результат (resultId), без покруток. */
+    выбыл. Колесо рисуется ОДИН раз на весь розыгрыш из полного исходного
+    candidates (геометрия секторов и mids не пересчитываются между раундами)
+    — выбывшие варианты остаются на колесе затемнёнными, а не пропадают, см.
+    фидбек пользователя. Порядок и состав раундов сервер уже зафиксировал,
+    фронт их не выбирает, только визуализирует. При prefers-reduced-motion
+    раунды не проигрываются — колесо сразу встаёт на итоговый результат
+    (resultId), без покруток. */
 async function animateElimination(container, candidates, rounds, resultId) {
   const resultIndex = Math.max(0, candidates.findIndex(c => c.kinopoiskId === resultId));
+  const { svg, mids } = renderWheelSvg(container, candidates);
   if (prefersReducedMotion() || !rounds || !rounds.length) {
-    const { svg, mids } = renderWheelSvg(container, candidates);
     await spinWheelTo(svg, mids, resultIndex);
     return;
   }
 
-  let remaining = candidates.slice();
   for (const round of rounds) {
-    const targetIndex = remaining.findIndex(c => c.kinopoiskId === round.eliminated);
+    const targetIndex = candidates.findIndex(c => c.kinopoiskId === round.eliminated);
     if (targetIndex === -1) continue;   // рассинхрон с сервером — пропускаем раунд, не роняем анимацию
-    const { svg, mids } = renderWheelSvg(container, remaining);
     await spinWheelTo(svg, mids, targetIndex);
     const sector = svg.querySelector(`path[data-kp="${round.eliminated}"]`);
     if (sector) sector.style.opacity = ".25";
     await new Promise(r => setTimeout(r, 500));
-    remaining = remaining.filter(c => c.kinopoiskId !== round.eliminated);
   }
 }
 
