@@ -1486,14 +1486,24 @@ function renderDrawSetup() {
   $("drawSetup").classList.remove("hidden");
   const stage = $("drawStage");
   stage.classList.remove("hidden");
-  const result = $("drawResult");
-  result.classList.add("hidden");
-  result.innerHTML = "";
+  hideDrawResult();
   const btn = $("drawStartBtn");
   btn.disabled = false;
   btn.textContent = "Выбрать случайный";
   closeDrawSettingsPanel();
   updateMethodButtons();
+}
+
+/** Прячет и чистит панель с результатом (кнопки "Смотреть на Кинопоиске" и
+    т.п.) — вызывается и при смене метода, и в начале новой прокрутки, чтобы
+    под новым превью/новой прокруткой не оставались кнопки от ПРЕДЫДУЩЕГО
+    результата (см. showDrawResult — сама панель, наоборот, никогда не
+    скрывает #drawSetup, переключатель метода и «Выбрать случайный» теперь
+    всегда на экране, план задачи «кнопки не должны пропадать»). */
+function hideDrawResult() {
+  const result = $("drawResult");
+  result.classList.add("hidden");
+  result.innerHTML = "";
 }
 
 function updateMethodButtons() {
@@ -1502,9 +1512,9 @@ function updateMethodButtons() {
   $("methodEliminationBtn").classList.toggle("sel", drawState.method === "elimination");
   renderMethodPreview();
 }
-$("methodWeightedBtn").onclick = () => { if (!drawState || drawState.spinning) return; drawState.method = "weighted_random"; updateMethodButtons(); };
-$("methodWheelBtn").onclick = () => { if (!drawState || drawState.spinning) return; drawState.method = "wheel"; updateMethodButtons(); };
-$("methodEliminationBtn").onclick = () => { if (!drawState || drawState.spinning) return; drawState.method = "elimination"; updateMethodButtons(); };
+$("methodWeightedBtn").onclick = () => { if (!drawState || drawState.spinning) return; drawState.method = "weighted_random"; hideDrawResult(); updateMethodButtons(); };
+$("methodWheelBtn").onclick = () => { if (!drawState || drawState.spinning) return; drawState.method = "wheel"; hideDrawResult(); updateMethodButtons(); };
+$("methodEliminationBtn").onclick = () => { if (!drawState || drawState.spinning) return; drawState.method = "elimination"; hideDrawResult(); updateMethodButtons(); };
 
 $("drawStartBtn").onclick = async () => {
   if (!drawState || drawState.spinning) return;
@@ -1515,14 +1525,16 @@ $("drawStartBtn").onclick = async () => {
   $("drawMethodRow").classList.add("disabled");
   closeDrawSettingsPanel();
   $("drawSettingsBtn").disabled = true;
+  hideDrawResult();   // от ПРЕДЫДУЩЕГО прогона — иначе его кнопки видны поверх новой прокрутки
   const data = await act(() => api(`/rooms/${drawState.roomId}/draw`, { method: "POST", body: { method: drawState.method } }));
   if (!data) { drawState.spinning = false; btn.disabled = false; btn.textContent = "Выбрать случайный"; $("drawMethodRow").classList.remove("disabled"); $("drawSettingsBtn").disabled = false; return; }
 
-  // Переключатель метода (#drawMethodRow, внутри #drawSetup) остаётся на
-  // экране всё время розыгрыша, включая саму прокрутку — прячем весь
-  // #drawSetup только на финальном экране результата, см. showDrawResult и
-  // план задачи 3. #drawStage перерисовывается с нуля на каждый прогон —
-  // старое превью/предыдущая прокрутка не может «залипнуть» на экране.
+  // Переключатель метода и «Выбрать случайный» (#drawSetup) остаются на
+  // экране ВСЕГДА — и во время прокрутки, и на финальном экране результата
+  // (см. showDrawResult, который теперь #drawSetup не трогает вовсе — план
+  // задачи «кнопки не должны пропадать»). #drawStage перерисовывается с нуля
+  // на каждый прогон — старое превью/предыдущая прокрутка не может
+  // «залипнуть» на экране.
   const stage = $("drawStage");
   stage.innerHTML = "";
 
@@ -1531,6 +1543,8 @@ $("drawStartBtn").onclick = async () => {
   else await animateWeightedRandom(stage, data.candidates, data.resultKinopoiskId);
 
   drawState.spinning = false;
+  btn.disabled = false;
+  btn.textContent = "Выбрать случайный";
   $("drawMethodRow").classList.remove("disabled");
   $("drawSettingsBtn").disabled = false;
   showDrawResult(data.candidates, data.resultKinopoiskId);
@@ -1855,22 +1869,21 @@ async function animateElimination(container, candidates, rounds, resultId) {
 function showDrawResult(candidates, resultId) {
   const mv = candidates.find(c => c.kinopoiskId === resultId) || {};
   const roomId = drawState.roomId;
-  // Переключатель метода виден весь розыгрыш (выбор метода + сама прокрутка,
-  // см. drawStartBtn.onclick) — прячем его здесь, на самом финальном экране
-  // результата (см. план задачи 3): выбирать метод заново уже не имеет
-  // смысла, для повторного прогона есть «Крутить ещё раз». #drawStage
-  // (колесо/карусель) ТЕПЕРЬ остаётся на экране — само оно уже остановлено
-  // на результате анимацией выше (см. план задачи «кнопки под
+  // Переключатель метода и «Выбрать случайный» (#drawSetup) остаются на
+  // экране и здесь, на финальном экране результата — их больше НЕ прячем
+  // (см. план задачи «кнопки не должны пропадать»): чтобы крутить ещё раз,
+  // достаточно снова нажать «Выбрать случайный», отдельная кнопка «Крутить
+  // ещё раз» стала избыточной и убрана. #drawStage (колесо/карусель) уже
+  // остановлено на результате анимацией выше (см. план задачи «кнопки под
   // колесом/каруселью»), кнопки результата ложатся под ним.
-  $("drawSetup").classList.add("hidden");
   const box = $("drawResult");
   box.classList.remove("hidden");
   const year = mv.year ? ` (${mv.year})` : "";
   // «Случайный выбор» уже показывает победителя крупно прямо в самой ленте
-  // (см. reel-item-winner в renderReel/markReelWinner) — отдельная карточка
-  // с постером в #drawResult тут избыточна, оставляем только кнопки. У
-  // колеса и «На выбывание» увеличить сектор победителя нечем — там карточка
-  // с обложкой остаётся, как и раньше (см. план задачи 5).
+  // (см. .reel-item-focused в renderReel/applyReelFocusScale) — отдельная
+  // карточка с постером в #drawResult тут избыточна, оставляем только
+  // кнопки. У колеса и «На выбывание» увеличить сектор победителя нечем —
+  // там карточка с обложкой остаётся, как и раньше (см. план задачи 5).
   const showCard = drawState.method !== "weighted_random";
   box.innerHTML = `
     ${showCard ? `
@@ -1881,16 +1894,12 @@ function showDrawResult(candidates, resultId) {
     <div class="row result-actions">
       <button class="btn outlined" id="drawKpBtn">Смотреть на Кинопоиске</button>
       <button class="btn filled" id="drawWatchedBtn">Отметить просмотренным</button>
-    </div>
-    <div class="row result-actions">
-      <button class="btn outlined" id="drawAgainBtn">Крутить ещё раз</button>
     </div>`;
   $("drawKpBtn").onclick = () => window.open(kinopoiskCxUrl(resultId), "_blank", "noopener");
   $("drawWatchedBtn").onclick = () => act(async () => {
     await api(`/rooms/${roomId}/movies/${resultId}/watched`, { method: "POST" });
     location.hash = "#/room/" + roomId;
   }, "Отмечено просмотренным");
-  $("drawAgainBtn").onclick = () => { drawState = { roomId, method: drawState.method }; renderDrawSetup(); };
 }
 
 // ───────────────────────── приглашение ─────────────────────────
