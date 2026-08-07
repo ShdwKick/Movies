@@ -438,6 +438,16 @@ select{
    комнат/поиск по коду выше). TODO(будущее): разделение витрины по жанрам. */
 #cachedMoviesWrap{margin-top:1.6rem;padding-top:1.2rem;border-top:1px solid var(--md-sys-color-outline-variant)}
 
+/* Панель сортировки над плитками (#cachedSortSelect) — select уже стилизован
+   общим правилом select{} выше в файле, тут только выравнивание строки. */
+.showcase-toolbar{display:flex;justify-content:flex-end;margin-top:.8rem}
+
+/* Пейджер под плитками витрины (Стр. N из M) — компактный ряд, кнопки те же
+   .btn.outlined.sm, что и везде. Прячется целиком, если фильмов меньше
+   лимита страницы (см. renderCachedMovies в app.js) — сортировка при этом
+   остаётся видимой (.showcase-toolbar не трогаем). */
+.pager{display:flex;justify-content:space-between;align-items:center;gap:.8rem;margin-top:1rem}
+
 /* Компактная плитка витрины — постер (с меню «Добавить в…» бейджем поверх
    обложки) и строка название/год + «Смотреть» (см. renderMovieTile в app.js).
    Плитка САМА больше не <button> (внутри появились свои кнопки — «Смотреть»
@@ -477,6 +487,16 @@ select{
    постере. currentColor:#fff тут же используется hover/active-подсветкой
    кнопки (.icon-btn::after), поэтому отдельного :hover-правила не нужно. */
 .movie-tile-poster-wrap .menu-wrap>.icon-btn{background:rgba(0,0,0,.45);color:#fff}
+/* Кнопка появляется только по наведению/фокусу — но ТОЛЬКО на устройствах,
+   которые реально поддерживают hover (мышь/трекпад): на тач-экранах hover
+   не срабатывает никогда, и кнопка стала бы недостижимой, поэтому там она
+   остаётся всегда видимой, как раньше. :focus-within — чтобы кнопка была
+   достижима с клавиатуры Tab'ом, не только курсором. */
+@media(hover:hover){
+  .movie-tile-poster-wrap .menu-wrap{opacity:0;transition:opacity .15s var(--ease-std)}
+  .movie-tile:hover .movie-tile-poster-wrap .menu-wrap,
+  .movie-tile:focus-within .movie-tile-poster-wrap .menu-wrap{opacity:1}
+}
 
 /* Строка название/год + «Смотреть» — в один ряд (задача «Смотреть» на
    уровне заголовка, а не отдельным рядом внизу): текст слева и может занимать
@@ -484,10 +504,49 @@ select{
 .movie-tile-title-row{display:flex;justify-content:space-between;align-items:flex-start;gap:.4rem}
 .movie-tile-title-col{min-width:0}
 
-/* Постер побольше — для карточки фильма внутри #movieInfoModalBackdrop
-   (обычный .movie-poster в строке результата поиска мельче, тут модалка
-   заведомо просторнее). */
-.movie-poster.lg{width:7.2rem;height:10.8rem}
+/* Модалка «Фильм» — крупный постер во всю ширину вместо узкого рядом с
+   текстом (по эскизу пользователя). aspect-ratio:2/3 держит пропорции
+   постера, поэтому при росте ширины блок закономерно становится выше —
+   это ожидаемо, не баг; .modal и так прокручивается (max-height:85vh;
+   overflow:auto — тот же overflow заодно клипует бледнящий постер по
+   скруглению самой модалки, отдельно ничего клипать не нужно).
+   Отрицательные margin у постера — компенсируют padding .modal
+   (1.1rem 1.3rem 1.3rem), чтобы постер шёл вровень с краями окна, а не
+   отступал от них как остальной контент (только у постера, остальное —
+   название/подробности/кнопки — по-прежнему в обычном паддинге модалки). */
+.movie-info-poster{
+  width:calc(100% + 2.6rem);margin:-1.1rem -1.3rem 0;aspect-ratio:2/3;
+  overflow:hidden;background:var(--md-sys-color-surface-container-high);
+}
+.movie-info-poster img{width:100%;height:100%;object-fit:cover;display:block}
+/* Название+год слева, чипы-рейтинги справа, в одну строку под постером —
+   тот же .chip-row, что и везде, просто прижат к правому краю в этом
+   контексте (margin-top:0, тут не нужен — .movie-info-caption сам flex). */
+.movie-info-caption{display:flex;justify-content:space-between;align-items:flex-start;gap:.8rem;margin-top:.8rem}
+.movie-info-caption .title{font-weight:650;font-size:16px}
+.movie-info-caption .chip-row{justify-content:flex-end;margin-top:0}
+.movie-info-sep{height:1px;background:var(--md-sys-color-outline-variant);margin:.9rem 0}
+/* «Смотреть»/«Страница на Кинопоиске» — рядом друг с другом, поровну делят
+   ширину (flex:1 у каждой), а не одна крупная и одна с текстом впритык. */
+.movie-info-actions .btn{flex:1}
+
+/* Заголовок модалки убран из видимой шапки (дублирует название под
+   постером) — h2 остаётся в DOM только ради aria-labelledby на .modal, сам
+   визуально спрятан стандартным sr-only-приёмом (не display:none — тот
+   убрал бы его и из accessibility-дерева, а не только с экрана). Шапка
+   (меню «…»/крестик) при этом переезжает поверх самого постера — тем же
+   приёмом, что и бейдж на плитке витрины (.movie-tile-poster-wrap), только
+   тут абсолютным позиционированием всего .modal-head целиком, а не только
+   .menu-wrap: title больше не занимает место в строке — justify-content
+   явно на flex-end, чтобы .modal-head-actions не съехал влево туда, где
+   раньше был текстовый заголовок. */
+#movieInfoModalTitle{
+  position:absolute;width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
+#movieInfoModalBackdrop .modal{position:relative}
+#movieInfoModalBackdrop .modal-head{position:absolute;top:.6rem;left:.6rem;right:.6rem;z-index:2;justify-content:flex-end}
+#movieInfoModalBackdrop .modal-head-actions .icon-btn{background:rgba(0,0,0,.45);color:#fff}
 
 /* Шапка модалки «Фильм» — меню «Добавить в…» (renderAddToMenu) встаёт
    рядом с крестиком закрытия, а не бейджем поверх постера: постер тут узкий

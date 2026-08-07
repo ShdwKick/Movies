@@ -33,6 +33,12 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 // kinopoisk.ru (см. план).
 const kinopoiskCxUrl = (kinopoiskId) => `https://www.kinopoisk.cx/film/${kinopoiskId}/`;
 
+// Настоящая страница фильма на kinopoisk.ru (карточка/рейтинг/отзывы) — НЕ то
+// же самое, что kinopoiskCxUrl выше (тот открывает сторонний просмотр), две
+// разные ссылки на два разных назначения, заведены отдельными функциями
+// намеренно (см. план: «Страница на Кинопоиске»).
+const kinopoiskRuUrl = (kinopoiskId) => `https://www.kinopoisk.ru/film/${kinopoiskId}/`;
+
 let auth = null;
 let state = {
   me: null,     // { id, username, name }
@@ -44,6 +50,12 @@ let state = {
 // какая механика выбрана (не отправлена ещё), candidates/resultKinopoiskId
 // заполняются ответом сервера уже ПОСЛЕ нажатия «Крутить».
 let drawState = null;
+
+// Витрина «Из базы» на главной — пагинация+сортировка (GET /api/movies?
+// limit&offset&sort). total заполняется каждым ответом сервера, offset
+// ОБЯЗАТЕЛЬНО сбрасывается на 0 при смене sort — иначе легко улететь на
+// несуществующую страницу для новой сортировки (см. renderCachedMovies).
+let showcaseState = { offset: 0, limit: 24, sort: "recent", total: 0 };
 
 /** Как подписывать человека: имя показывается, только если он сам включил его
     показ в общем кабинете BurningHouse — иначе остаётся логин. */
@@ -203,24 +215,59 @@ async function showRooms() {
   renderCachedMovies(state.rooms);
 }
 
-/** Витрина закэшированных фильмов (GET /api/movies), без текстового
-    заголовка — только визуальный разделитель (#cachedMoviesWrap в
-    styles.css). TODO(будущее): разделение витрины по жанрам. Раньше тут
-    стояла полноразмерная карточка результата поиска — слишком тяжело для
-    главной; теперь компактная плитка (renderMovieTile), клик по которой
-    открывает #movieInfoModalBackdrop с теми же данными (moviePayload уже
-    полный, повторный запрос к сети не нужен). Секция скрыта целиком, пока
-    кэш пуст — план явно требует не показывать пустой блок. */
+/** Витрина закэшированных фильмов (GET /api/movies?limit&offset&sort,
+    состояние — showcaseState), без текстового заголовка — только визуальный
+    разделитель (#cachedMoviesWrap в styles.css). TODO(будущее): разделение
+    витрины по жанрам. Раньше тут стояла полноразмерная карточка результата
+    поиска — слишком тяжело для главной; теперь компактная плитка
+    (renderMovieTile), клик по которой открывает #movieInfoModalBackdrop с
+    теми же данными (moviePayload уже полный, повторный запрос к сети не
+    нужен). Секция скрыта целиком, пока кэш пуст — план явно требует не
+    показывать пустой блок. Пейджер (#cachedPager) прячется отдельно, если
+    все фильмы помещаются на одну страницу — сортировка (#cachedSortSelect)
+    при этом остаётся видимой. */
 async function renderCachedMovies(rooms) {
-  const data = await act(() => api("/movies?limit=24"));
+  const { limit, offset, sort } = showcaseState;
+  const data = await act(() => api(`/movies?limit=${limit}&offset=${offset}&sort=${encodeURIComponent(sort)}`));
   const wrap = $("cachedMoviesWrap");
   if (!data || !data.movies.length) { wrap.hidden = true; return; }
   wrap.hidden = false;
+  showcaseState.total = data.total;
+
+  $("cachedSortSelect").value = sort;
+
   const box = $("cachedMoviesList");
   box.textContent = "";
   openCardMenu = null; // старые плитки со своими меню-«…» уходят целиком
   for (const mv of data.movies) box.append(renderMovieTile(mv, rooms));
+
+  // Пейджер прячется целиком, если всё помещается на одну страницу — но
+  // #cachedSortSelect (уже видимый вместе со всем wrap) остаётся видимым
+  // всегда, пока секция не пуста: сортировка полезна и на одной странице.
+  const fitsOnOnePage = data.total <= limit;
+  $("cachedPager").hidden = fitsOnOnePage;
+  if (!fitsOnOnePage) {
+    const pages = Math.max(1, Math.ceil(data.total / limit));
+    const page = Math.floor(offset / limit) + 1;
+    $("cachedPagerLabel").textContent = `Стр. ${page} из ${pages}`;
+    $("cachedPrevBtn").disabled = offset <= 0;
+    $("cachedNextBtn").disabled = offset + limit >= data.total;
+  }
 }
+
+$("cachedSortSelect").onchange = e => {
+  showcaseState.sort = e.target.value;
+  showcaseState.offset = 0; // иначе можно улететь на несуществующую страницу новой сортировки
+  renderCachedMovies(state.rooms);
+};
+$("cachedPrevBtn").onclick = () => {
+  showcaseState.offset = Math.max(0, showcaseState.offset - showcaseState.limit);
+  renderCachedMovies(state.rooms);
+};
+$("cachedNextBtn").onclick = () => {
+  showcaseState.offset += showcaseState.limit;
+  renderCachedMovies(state.rooms);
+};
 
 // Иконка «Смотреть» на плитке витрины — тот же плей-треугольник, что и
 // текстовая кнопка «Смотреть» карточки очереди (renderMovieCard), просто в
@@ -278,28 +325,33 @@ function renderMovieTile(mv, rooms) {
 /** Модалка «Фильм» — открывается по клику на плитку витрины. Один и тот же
     DOM-узел #movieInfoModalBackdrop переиспользуется под любой фильм: тело
     перерисовывается целиком (body.innerHTML = ...) при каждом клике, новых
-    id не плодим. Постер+название+чипы — те же данные из moviePayload, что
-    уже на клиенте; режиссёр/актёры/описание — тот же формат, что и
-    «Подробнее» у карточки очереди/истории (bindMovieDetailToggle), но без
-    сворачивания — тут это и есть весь контент модалки. Блок действий —
-    переиспользованный renderAddTargetActions (тот же компонент, что
-    появляется по клику «Добавить в…» в компактных меню, см. renderAddToMenu),
-    не копипаста. */
+    id не плодим. Раскладка по эскизу пользователя: крупный постер во всю
+    ширину модалки (.movie-info-poster, aspect-ratio:2/3 — сохраняет
+    пропорции, поэтому блок стал выше, а не просто шире), под ним в одну
+    строку название+год слева и чипы-рейтинги справа (.movie-info-caption),
+    разделитель, затем режиссёр/актёры/описание (тот же формат, что
+    «Подробнее» у карточки очереди — renderMovieDetail, но тут без
+    сворачивания, это и есть весь контент модалки), и внизу рядом друг с
+    другом «Смотреть»/«Страница на Кинопоиске» (.movie-info-actions).
+    Меню «Добавить в…» — по-прежнему в шапке модалки рядом с крестиком
+    закрытия (см. ниже #movieInfoModalMenuWrap), не над постером. */
 function renderMovieInfoModal(mv, rooms) {
   const year = mv.year ? ` (${mv.year})` : "";
   $("movieInfoModalTitle").textContent = `${mv.title}${year}`;
   const body = $("movieInfoModalBody");
   body.innerHTML = `
-    <div class="movie-card-head">
-      ${mv.posterUrl ? `<img class="movie-poster lg" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster lg"></div>'}
-      <div class="movie-info">
-        <div class="title">${esc(mv.title)}${esc(year)}</div>
-        <div class="chip-row">${movieChipsHtml(mv)}</div>
-      </div>
+    <div class="movie-info-poster">
+      ${mv.posterUrl ? `<img src="${esc(mv.posterUrl)}" alt="">` : ""}
     </div>
+    <div class="movie-info-caption">
+      <div class="title">${esc(mv.title)}${esc(year)}</div>
+      <div class="chip-row">${movieChipsHtml(mv)}</div>
+    </div>
+    <div class="movie-info-sep"></div>
     <div class="movie-detail"></div>
-    <div class="row">
-      <button class="btn outlined" id="movieInfoWatchBtn">Смотреть</button>
+    <div class="row movie-info-actions">
+      <button class="btn filled" id="movieInfoWatchBtn">Смотреть</button>
+      <button class="btn outlined" id="movieInfoKpBtn">Страница на Кинопоиске</button>
     </div>`;
 
   const roles = [];
@@ -319,6 +371,7 @@ function renderMovieInfoModal(mv, rooms) {
   menuWrapBox.textContent = "";
   menuWrapBox.append(renderAddToMenu(mv.kinopoiskId, rooms));
   body.querySelector("#movieInfoWatchBtn").onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
+  body.querySelector("#movieInfoKpBtn").onclick = () => window.open(kinopoiskRuUrl(mv.kinopoiskId), "_blank", "noopener");
 }
 
 function renderRooms() {
@@ -703,7 +756,16 @@ async function renderMovieDetail(box, mv) {
   const desc = mv.description
     ? `<p class="movie-desc${roles.length ? " has-sep" : ""}">${esc(mv.description)}</p>`
     : "";
-  box.innerHTML = (roles.join("") + desc) || '<p class="muted">Подробностей нет.</p>';
+  const content = roles.join("") + desc;
+  // Кнопка «Страница на Кинопоиске» — только когда реально есть что показать
+  // (спиннер загрузки и сообщение об ошибке сети выше по функции сюда не
+  // доходят, у них свои return). data-act, т.к. box.innerHTML — строка;
+  // обработчик вешаем ПОСЛЕ присвоения innerHTML, тем же паттерном data-act,
+  // что уже используется в файле.
+  box.innerHTML = content
+    ? content + '<div class="row"><button class="btn outlined" data-act="kpPage">Страница на Кинопоиске</button></div>'
+    : '<p class="muted">Подробностей нет.</p>';
+  if (content) box.querySelector('[data-act="kpPage"]').onclick = () => window.open(kinopoiskRuUrl(mv.kinopoiskId), "_blank", "noopener");
 }
 
 const CHEVRON_DOWN_ICON = '<svg class="icon chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';

@@ -94,7 +94,23 @@
        самой обёртке, см. #cachedMoviesWrap в styles.css).
        TODO(будущее): разделение витрины по жанрам. -->
   <div id="cachedMoviesWrap" hidden>
+    <div class="showcase-toolbar">
+      <select id="cachedSortSelect">
+        <option value="recent">Недавно добавленные</option>
+        <option value="title_asc">По алфавиту (А→Я)</option>
+        <option value="title_desc">По алфавиту (Я→А)</option>
+        <option value="year_desc">Сначала новые (год)</option>
+        <option value="year_asc">Сначала старые (год)</option>
+        <option value="rating_desc">Высокий рейтинг</option>
+        <option value="rating_asc">Низкий рейтинг</option>
+      </select>
+    </div>
     <div class="movie-grid" id="cachedMoviesList"></div>
+    <div class="pager" id="cachedPager">
+      <button class="btn outlined sm" id="cachedPrevBtn">← Назад</button>
+      <span class="muted" id="cachedPagerLabel"></span>
+      <button class="btn outlined sm" id="cachedNextBtn">Вперёд →</button>
+    </div>
   </div>
 </section>
 

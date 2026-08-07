@@ -243,8 +243,10 @@ const stmt = {
 
   movieByKpId: db.prepare("SELECT * FROM movies WHERE kinopoisk_id = ?"),
   // Витрина «Из базы» на главной (см. GET /api/movies ниже) — просто самые
-  // недавно закэшированные фильмы, без какой-либо персонализации.
-  moviesLatest: db.prepare("SELECT * FROM movies ORDER BY cached_at DESC LIMIT ?"),
+  // недавно закэшированные фильмы (или в другом порядке — MOVIES_SORT_ORDER
+  // ниже), без какой-либо персонализации. Общий счётчик — для пагинации на
+  // фронте (сколько всего страниц), без LIMIT/OFFSET.
+  moviesCount: db.prepare("SELECT COUNT(*) AS n FROM movies"),
   // kinopoisk_id — PRIMARY KEY, поэтому кэш обновляется UPSERT'ом: один и тот
   // же фильм, найденный заново через /refresh, просто перезаписывает поля.
   upsertMovie: db.prepare(`
@@ -530,7 +532,58 @@ function moviePayload(row) {
     actors: JSON.parse(row.actors || "[]"),
     cachedAt: row.cached_at,
     detailCachedAt: row.detail_cached_at,
+    // avg_score/rating_count присутствуют только у строк, которые их сами
+    // подобрали подзапросом (moviesShowcasePage/watchedList) — moviePayload
+    // переиспользуется и для строк без этих полей (напр. movieByKpId),
+    // тогда оба поля остаются undefined и просто не попадают в JSON.
+    // Округление — та же формула, что у roundScore ниже по файлу (null,
+    // если поле есть, но ещё ни одной оценки; не 0 — AVG(NULL) не значит
+    // «оценка ноль»).
+    avgScore: row.avg_score !== undefined ? (row.avg_score == null ? null : Math.round(row.avg_score * 10) / 10) : undefined,
+    ratingCount: row.rating_count,
   };
+}
+
+// Whitelist сортировок витрины «Из базы» (GET /api/movies) — ORDER BY
+// собирается ТОЛЬКО из этой карты по ключу, сырой query-параметр sort в SQL
+// никогда не попадает. «x IS NULL, x DESC/ASC» уводит NULL-ы (нет года/пока
+// никто не оценил) в конец списка независимо от направления сортировки —
+// для title это не нужно (NOT NULL), для year/avg_score — обязательно, иначе
+// пустые значения перемешивались бы с осмысленными как попало.
+const MOVIES_SORT_ORDER = {
+  recent: "cached_at DESC",
+  title_asc: "title ASC",
+  title_desc: "title DESC",
+  year_desc: "year IS NULL, year DESC",
+  year_asc: "year IS NULL, year ASC",
+  rating_desc: "avg_score IS NULL, avg_score DESC",
+  rating_asc: "avg_score IS NULL, avg_score ASC",
+};
+
+/**
+ * Страница витрины «Из базы» — ORDER BY берётся из MOVIES_SORT_ORDER по
+ * ключу (whitelist, не конкатенация сырого query-параметра), LIMIT/OFFSET —
+ * обычные bind-параметры. avg_score/rating_count — та же пара
+ * коррелированных подзапросов, что и у watchedList (НАША средняя оценка
+ * пользователей сервиса, movie_marks, а не kp_rating/imdb_rating с
+ * Кинопоиска/IMDb) — добавлены ВСЕГДА, не только когда sort того требует:
+ * так moviePayload стабильно отдаёт avgScore/ratingCount независимо от
+ * текущей сортировки, а лишний подзапрос на масштабе личного проекта не
+ * стоит того, чтобы городить два разных SELECT. db.prepare() вызывается тут
+ * же, не на инициализации — вариантов ORDER BY несколько, кэшировать
+ * подготовленные запросы на личном проекте такого масштаба не имеет смысла.
+ */
+function moviesShowcasePage(limit, offset, sort) {
+  const orderBy = MOVIES_SORT_ORDER[sort] || MOVIES_SORT_ORDER.recent;
+  const rows = db.prepare(`
+    SELECT movies.*,
+           (SELECT AVG(score) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS avg_score,
+           (SELECT COUNT(*) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS rating_count
+      FROM movies
+     ORDER BY ${orderBy}
+     LIMIT ? OFFSET ?
+  `).all(limit, offset);
+  return rows;
 }
 
 /** Единая обработка ошибок poiskkino.js — квота/не настроено/апстрим в осмысленные HTTP-коды. */
@@ -739,8 +792,14 @@ async function api(req, res, seg, user, query) {
     let limit = parseInt(query.get("limit"), 10);
     if (!Number.isFinite(limit) || limit <= 0) limit = 24;
     limit = Math.min(limit, 60);
-    const rows = stmt.moviesLatest.all(limit);
-    return json(res, 200, { movies: rows.map(moviePayload) });
+    let offset = parseInt(query.get("offset"), 10);
+    if (!Number.isFinite(offset) || offset < 0) offset = 0;
+    // Неизвестный/отсутствующий sort — молча падаем на recent (не 400):
+    // whitelist проверяется внутри moviesShowcasePage через MOVIES_SORT_ORDER.
+    const sort = query.get("sort") || "recent";
+    const rows = moviesShowcasePage(limit, offset, sort);
+    const total = stmt.moviesCount.get().n;
+    return json(res, 200, { movies: rows.map(moviePayload), total, limit, offset });
   }
 
   // ── карточка фильма целиком (используется «Подробнее» у результатов
