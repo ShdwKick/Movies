@@ -1788,11 +1788,21 @@ function renderReel(container, candidates, targetIndex, animate) {
     const finish = () => {
       if (done) return;
       done = true;
+      track.removeEventListener("transitionend", onTrackTransitionEnd);
       stopFocusLoop();
       applyReelFocusScale(viewport);   // точный финальный расчёт — тот, кто на линии, и есть победитель, settle() уже поставил его туда
       resolve();
     };
-    track.addEventListener("transitionend", finish, { once: true });
+    // transitionend БАББЛИТСЯ — у каждого .reel-item СВОЙ transform-переход
+    // (.15s, см. .reel-item-focused в styles.css), и первый же завершившийся
+    // переход укрупнения долетал сюда и триггерил finish() спустя ~150мс
+    // после старта прокрутки, а не после реальных нескольких секунд самого
+    // движения ленты — отсюда и «первые две карточки работают, дальше
+    // ничего»: цикл фокуса убивался почти сразу, а обычный {once:true} на
+    // track съедал слушатель именно на этом чужом всплывшем событии. Реагируем
+    // только на переход СВОЕГО transform, у которого e.target === track.
+    const onTrackTransitionEnd = (e) => { if (e.target === track) finish(); };
+    track.addEventListener("transitionend", onTrackTransitionEnd);
     setTimeout(finish, duration * 1000 + 1000);   // подстраховка, если transitionend не пришёл — с запасом под настраиваемую длительность
   });
 }
@@ -1909,8 +1919,19 @@ function spinWheelTo(svg, mids, targetIndex) {
       svg.style.transform = `rotate(${rotation}deg)`;
     }));
     let done = false;
-    const finish = () => { if (done) return; done = true; resolve(); };
-    svg.addEventListener("transitionend", finish, { once: true });
+    const finish = () => {
+      if (done) return;
+      done = true;
+      svg.removeEventListener("transitionend", onSvgTransitionEnd);
+      resolve();
+    };
+    // transitionend бабблится — у секторов есть свой opacity-переход (см.
+    // .wheel-wrap svg path в styles.css, гашение выбывшего в
+    // animateElimination), поэтому реагируем только на переход СВОЕГО
+    // transform у svg (та же защита, что и в renderReel/finish — см. план
+    // задачи «карусель работает только для первых двух»).
+    const onSvgTransitionEnd = (e) => { if (e.target === svg) finish(); };
+    svg.addEventListener("transitionend", onSvgTransitionEnd);
     setTimeout(finish, duration * 1000 + 800);   // подстраховка, если transitionend не пришёл — с запасом под настраиваемую длительность
   });
 }
@@ -1935,19 +1956,33 @@ function animateWheel(container, candidates, resultId) {
     (resultId), без покруток. */
 async function animateElimination(container, candidates, rounds, resultId) {
   const resultIndex = Math.max(0, candidates.findIndex(c => c.kinopoiskId === resultId));
-  const { svg, mids } = renderWheelSvg(container, candidates);
   if (prefersReducedMotion() || !rounds || !rounds.length) {
+    const { svg, mids } = renderWheelSvg(container, candidates);
     await spinWheelTo(svg, mids, resultIndex);
     return;
   }
 
+  // Раунд = докрутка до выбывающего кандидата НА ТЕКУЩЕМ (ещё не уменьшенном)
+  // колесе, короткая пауза с погашенным сектором — чтобы было видно, КТО
+  // именно выбыл, — и только ПОСЛЕ этого колесо перерисовывается уже без
+  // него (remaining), сектора соседей пересчитываются на освободившееся
+  // место. Явно попросили именно так: выбывший должен реально убираться из
+  // колеса, а не просто гаснуть навсегда среди остальных.
+  let remaining = candidates.slice();
+  let { svg, mids } = renderWheelSvg(container, remaining);
   for (const round of rounds) {
-    const targetIndex = candidates.findIndex(c => c.kinopoiskId === round.eliminated);
+    const targetIndex = remaining.findIndex(c => c.kinopoiskId === round.eliminated);
     if (targetIndex === -1) continue;   // рассинхрон с сервером — пропускаем раунд, не роняем анимацию
     await spinWheelTo(svg, mids, targetIndex);
     const sector = svg.querySelector(`path[data-kp="${round.eliminated}"]`);
     if (sector) sector.style.opacity = ".25";
     await new Promise(r => setTimeout(r, 500));
+    remaining = remaining.filter(c => c.kinopoiskId !== round.eliminated);
+    // Последний раунд (2 -> 1) колесо больше НЕ пересобираем — сектор на
+    // единственного оставшегося кандидата был бы просто сплошным кругом без
+    // какой-либо интриги. Финальным кадром намеренно остаются эти 2
+    // сектора: победитель ярко, последний выбывший — погашенным рядом с ним.
+    if (remaining.length > 1) ({ svg, mids } = renderWheelSvg(container, remaining));
   }
 }
 
