@@ -1586,38 +1586,73 @@ const TRAIL_LAPS = 2;
 // его туда, отдельно помечать не нужно).
 const REEL_FOCUS_SCALE = 1.5;
 
-/** Находит .reel-item, чей центр СЕЙЧАС ближе всего к центру viewport (там,
-    где неподвижный .reel-pointer), и увеличивает ТОЛЬКО его — у остальных
-    масштаб сбрасывается в обычный. Не градиент по соседям: либо элемент
-    точно на линии (в пределах половины своей ширины от центра), либо нет.
-    В моменте между двумя элементами (на полпути прокрутки) может не быть ни
-    одного «на линии» — это ожидаемо. Дёргается и один раз в покое (после
-    settle(), см. ниже), и на каждом кадре во время прокрутки (см.
-    startReelFocusLoop) — сам расчёт один и тот же, оба места просто
-    по-разному его вызывают. */
-function applyReelFocusScale(viewport) {
-  const items = viewport.querySelectorAll(".reel-item");
-  if (!items.length) return;
-  const vpRect = viewport.getBoundingClientRect();
-  const centerX = vpRect.left + vpRect.width / 2;
-  const itemW = items[0].getBoundingClientRect().width || 1;
-  let closest = null, closestDist = Infinity;
-  for (const item of items) {
-    const r = item.getBoundingClientRect();
-    const dist = Math.abs(r.left + r.width / 2 - centerX);
-    if (dist < closestDist) { closestDist = dist; closest = item; }
-  }
-  const onLine = closest && closestDist < itemW / 2;
-  for (const item of items) item.classList.toggle("reel-item-focused", item === closest && onLine);
+/** Текущий translateX ленты, считанный из getComputedStyle(track).transform
+    (вида "matrix(a, b, c, d, tx, ty)") — во время активной CSS-transition
+    браузер обязан отдавать здесь ТЕКУЩЕЕ промежуточное значение, это ровно
+    то же, что используется для реальной отрисовки. */
+function currentTrackTranslateX(track) {
+  const value = getComputedStyle(track).transform;
+  if (!value || value === "none") return 0;
+  const m = value.match(/matrix\(([^)]+)\)/);
+  if (!m) return 0;
+  const parts = m[1].split(",").map(s => parseFloat(s));
+  return parts.length >= 6 ? parts[4] : 0;
 }
 
-/** Стартует rAF-цикл, непрерывно пересчитывающий applyReelFocusScale, пока
-    едет лента (без этого элемент «на линии» менялся бы скачком только в
-    конце). Возвращает stop() — renderReel вызывает её в finish(), когда
-    прокрутка (transitionend/таймаут-подстраховка) завершилась. */
+/** Ставит .reel-item-focused ровно на тот .reel-item (по индексу в track),
+    чей центр СЕЙЧАС ближе всего к центру viewport (в пределах половины
+    ширины элемента — иначе не считается «на линии», между двумя элементами
+    на полпути прокрутки может не быть ни одного сфокусированного, это
+    ожидаемо). itemW/vw передаются готовыми (см. startReelFocusLoop) —
+    внутри цикла на каждый кадр иначе пришлось бы заново мерить геометрию
+    40+ элементов через getBoundingClientRect, а раньше именно так и было
+    сделано, и в реальном браузере (не в тестовом) это на практике не
+    обновлялось по ходу прокрутки — geometry дочерних .reel-item во время
+    самой CSS-transition на will-change:transform родителе оказалась
+    ненадёжной. Вместо этого индекс считается аналитически по единственному
+    дешёвому чтению текущей матрицы ленты (currentTrackTranslateX) — точно
+    та же величина, что реально движет CSS-transition, без обращения к
+    geometry детей вообще. */
+function applyReelFocusAt(track, items, itemW, vw) {
+  if (!items.length) return;
+  const tx = currentTrackTranslateX(track);
+  const rawIndex = (vw / 2 - tx) / itemW - 0.5;
+  const idx = Math.max(0, Math.min(items.length - 1, Math.round(rawIndex)));
+  const centerOfIdx = tx + idx * itemW + itemW / 2;
+  const onLine = Math.abs(centerOfIdx - vw / 2) < itemW / 2;
+  for (let i = 0; i < items.length; i++) items[i].classList.toggle("reel-item-focused", onLine && i === idx);
+}
+
+/** Разовый вызов applyReelFocusAt с самостоятельно вычисленными itemW/vw —
+    для состояния покоя (превью метода/финальный кадр после settle(), см.
+    ниже), где не важна стоимость лишнего getBoundingClientRect на разовый
+    вызов. Во время самой прокрутки использует не эту функцию, а
+    startReelFocusLoop — там те же величины считаются один раз на весь
+    цикл. */
+function applyReelFocusScale(viewport) {
+  const track = viewport.querySelector(".reel-track");
+  if (!track) return;
+  const items = [...track.children];
+  if (!items.length) return;
+  const itemW = items[0].getBoundingClientRect().width || 1;
+  const vw = viewport.getBoundingClientRect().width;
+  applyReelFocusAt(track, items, itemW, vw);
+}
+
+/** Стартует rAF-цикл, непрерывно пересчитывающий фокус-масштаб, пока едет
+    лента (без этого элемент «на линии» менялся бы скачком только в конце).
+    itemW/vw меряются ОДИН раз при старте (не меняются за время прокрутки —
+    ни размер карточек, ни ширина viewport), сам tick на каждый кадр только
+    читает текущую матрицу ленты и переключает класс — дёшево. Возвращает
+    stop() — renderReel вызывает её в finish(), когда прокрутка
+    (transitionend/таймаут-подстраховка) завершилась. */
 function startReelFocusLoop(viewport) {
+  const track = viewport.querySelector(".reel-track");
+  const items = track ? [...track.children] : [];
+  const itemW = items.length ? (items[0].getBoundingClientRect().width || 1) : 1;
+  const vw = viewport.getBoundingClientRect().width;
   let raf = requestAnimationFrame(function tick() {
-    applyReelFocusScale(viewport);
+    applyReelFocusAt(track, items, itemW, vw);
     raf = requestAnimationFrame(tick);
   });
   return () => cancelAnimationFrame(raf);
