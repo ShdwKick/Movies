@@ -1359,7 +1359,12 @@ $("deleteRoomBtn").onclick = async () => {
 const DRAW_DURATION_MIN_KEY = "movies.drawDurationMin";
 const DRAW_DURATION_MAX_KEY = "movies.drawDurationMax";
 const DRAW_DURATION_KEY = "movies.drawDuration";
-const DRAW_DURATION_DEFAULTS = { min: 1, max: 8, value: 3.2 };   // 3.2s — прежняя длительность карусели по факту (см. styles.css .reel-track)
+// value поднят с 3.2 до 6 — на старой скорости кандидаты пролетали мимо
+// центра быстрее, чем успевал доиграть transform-переход укрупнения
+// (.reel-item-focused, см. REEL_FOCUS_SCALE) — эффект просто не успевал
+// стать заметным глазу. См. также REEL_LAPS ниже (меньше кругов — меньше
+// суммарная дистанция на ту же длительность, то же самое соображение).
+const DRAW_DURATION_DEFAULTS = { min: 1, max: 10, value: 6 };
 
 function loadDrawDurationSettings() {
   const min = parseFloat(localStorage.getItem(DRAW_DURATION_MIN_KEY));
@@ -1562,7 +1567,11 @@ const prefersReducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)"
 // справа от указателя было пусто — та же дырка, что раньше была слева в
 // покое, просто с другой стороны. Кругов с запасом с обеих сторон достаточно
 // с большим отрывом, чтобы заполнить даже широкий viewport на любом экране.
-const REEL_LAPS = 5;
+// REEL_LAPS снижен с 5 до 3 — та же длительность прокрутки теперь тратится
+// на меньшую дистанцию, а значит каждый постер проводит в центральном слоте
+// заметно больше времени (см. DRAW_DURATION_DEFAULTS выше и «coverflow»-фокус
+// ниже — цель та же: дать эффекту укрупнения реально доиграть, а не мелькнуть).
+const REEL_LAPS = 3;
 const PREVIEW_LEAD_LAPS = 2;
 const TRAIL_LAPS = 2;
 
