@@ -1586,36 +1586,64 @@ const TRAIL_LAPS = 2;
 // его туда, отдельно помечать не нужно).
 const REEL_FOCUS_SCALE = 1.5;
 
-/** Текущий translateX ленты, считанный из getComputedStyle(track).transform
-    (вида "matrix(a, b, c, d, tx, ty)") — во время активной CSS-transition
-    браузер обязан отдавать здесь ТЕКУЩЕЕ промежуточное значение, это ровно
-    то же, что используется для реальной отрисовки. */
-function currentTrackTranslateX(track) {
-  const value = getComputedStyle(track).transform;
-  if (!value || value === "none") return 0;
-  const m = value.match(/matrix\(([^)]+)\)/);
-  if (!m) return 0;
-  const parts = m[1].split(",").map(s => parseFloat(s));
-  return parts.length >= 6 ? parts[4] : 0;
+/** Солвер кубического безье (алгоритм UnitBezier — тот же, которым сами
+    браузеры считают cubic-bezier() timing-function): по доле прошедшего
+    ВРЕМЕНИ x∈[0,1] возвращает долю пройденного ПУТИ y∈[0,1]. Нужен, чтобы
+    JS мог САМ знать, где сейчас лента, не читая это обратно из DOM — две
+    предыдущие попытки (читать geometry каждого .reel-item через
+    getBoundingClientRect, потом читать getComputedStyle(track).transform)
+    оказались ненадёжны в реальных браузерах (см. баг-репорт: «первые два
+    кандидата отрабатывают, дальше ничего» — во время самого перехода
+    браузер может отдавать transform не в том виде/не с той регулярностью,
+    на который расчёт полагался). Контрольные точки ДОЛЖНЫ совпадать с
+    cubic-bezier(...) у .reel-track в styles.css — если поменяете кривую
+    там, поменяйте и REEL_EASE ниже, иначе расчёт разойдётся с тем, что
+    реально рисует CSS. */
+function cubicBezierEase(p1x, p1y, p2x, p2y) {
+  const cx = 3 * p1x, bx = 3 * (p2x - p1x) - cx, ax = 1 - cx - bx;
+  const cy = 3 * p1y, by = 3 * (p2y - p1y) - cy, ay = 1 - cy - by;
+  const sampleX = t => ((ax * t + bx) * t + cx) * t;
+  const sampleY = t => ((ay * t + by) * t + cy) * t;
+  const sampleDerivX = t => (3 * ax * t + 2 * bx) * t + cx;
+  function solveT(x) {
+    let t = x;
+    for (let i = 0; i < 8; i++) {
+      const dx = sampleX(t) - x;
+      if (Math.abs(dx) < 1e-5) return t;
+      const d = sampleDerivX(t);
+      if (Math.abs(d) < 1e-6) break;
+      t -= dx / d;
+    }
+    let lo = 0, hi = 1;
+    t = x;
+    while (lo < hi) {
+      const dx = sampleX(t) - x;
+      if (Math.abs(dx) < 1e-5) return t;
+      if (dx > 0) hi = t; else lo = t;
+      t = (lo + hi) / 2;
+    }
+    return t;
+  }
+  return x => (x <= 0 ? 0 : x >= 1 ? 1 : sampleY(solveT(x)));
+}
+const REEL_EASE = cubicBezierEase(0.16, 1, 0.3, 1);   // см. .reel-track в styles.css
+
+/** Достаёт tx из инлайн-стиля вида "translateX(Npx)" — формат, который мы
+    сами же и пишем в settle() ниже, поэтому парсинг тривиален и надёжен (в
+    отличие от чтения обратно нормализованного getComputedStyle, см.
+    REEL_EASE выше). */
+function parseTranslateX(value) {
+  const m = /translateX\(([-\d.]+)px\)/.exec(value || "");
+  return m ? parseFloat(m[1]) : 0;
 }
 
-/** Ставит .reel-item-focused ровно на тот .reel-item (по индексу в track),
-    чей центр СЕЙЧАС ближе всего к центру viewport (в пределах половины
-    ширины элемента — иначе не считается «на линии», между двумя элементами
-    на полпути прокрутки может не быть ни одного сфокусированного, это
-    ожидаемо). itemW/vw передаются готовыми (см. startReelFocusLoop) —
-    внутри цикла на каждый кадр иначе пришлось бы заново мерить геометрию
-    40+ элементов через getBoundingClientRect, а раньше именно так и было
-    сделано, и в реальном браузере (не в тестовом) это на практике не
-    обновлялось по ходу прокрутки — geometry дочерних .reel-item во время
-    самой CSS-transition на will-change:transform родителе оказалась
-    ненадёжной. Вместо этого индекс считается аналитически по единственному
-    дешёвому чтению текущей матрицы ленты (currentTrackTranslateX) — точно
-    та же величина, что реально движет CSS-transition, без обращения к
-    geometry детей вообще. */
-function applyReelFocusAt(track, items, itemW, vw) {
+/** Ставит .reel-item-focused ровно на тот .reel-item (по индексу), чей
+    центр при заданном tx ближе всего к центру viewport (в пределах
+    половины ширины элемента — иначе не считается «на линии», между двумя
+    элементами на полпути прокрутки может не быть ни одного
+    сфокусированного, это ожидаемо). */
+function applyReelFocusAt(items, itemW, vw, tx) {
   if (!items.length) return;
-  const tx = currentTrackTranslateX(track);
   const rawIndex = (vw / 2 - tx) / itemW - 0.5;
   const idx = Math.max(0, Math.min(items.length - 1, Math.round(rawIndex)));
   const centerOfIdx = tx + idx * itemW + itemW / 2;
@@ -1623,12 +1651,12 @@ function applyReelFocusAt(track, items, itemW, vw) {
   for (let i = 0; i < items.length; i++) items[i].classList.toggle("reel-item-focused", onLine && i === idx);
 }
 
-/** Разовый вызов applyReelFocusAt с самостоятельно вычисленными itemW/vw —
-    для состояния покоя (превью метода/финальный кадр после settle(), см.
-    ниже), где не важна стоимость лишнего getBoundingClientRect на разовый
-    вызов. Во время самой прокрутки использует не эту функцию, а
-    startReelFocusLoop — там те же величины считаются один раз на весь
-    цикл. */
+/** Разовый пересчёт фокуса для состояния покоя (превью метода/финальный
+    кадр после settle(), см. ниже) — tx читается из собственного же
+    инлайн-стиля ленты (parseTranslateX), никакой анимации тут нет. Во
+    время самой прокрутки используется не эта функция, а startReelFocusLoop
+    (см. ниже) — там положение ленты считается аналитически по времени, не
+    читается из DOM вообще. */
 function applyReelFocusScale(viewport) {
   const track = viewport.querySelector(".reel-track");
   if (!track) return;
@@ -1636,23 +1664,30 @@ function applyReelFocusScale(viewport) {
   if (!items.length) return;
   const itemW = items[0].getBoundingClientRect().width || 1;
   const vw = viewport.getBoundingClientRect().width;
-  applyReelFocusAt(track, items, itemW, vw);
+  applyReelFocusAt(items, itemW, vw, parseTranslateX(track.style.transform));
 }
 
 /** Стартует rAF-цикл, непрерывно пересчитывающий фокус-масштаб, пока едет
     лента (без этого элемент «на линии» менялся бы скачком только в конце).
-    itemW/vw меряются ОДИН раз при старте (не меняются за время прокрутки —
-    ни размер карточек, ни ширина viewport), сам tick на каждый кадр только
-    читает текущую матрицу ленты и переключает класс — дёшево. Возвращает
+    Положение ленты в момент tick НЕ читается из DOM — вычисляется
+    аналитически из прошедшего времени (performance.now() - startTime) и
+    той же кривой замедления, что и у самого CSS-перехода (REEL_EASE), от
+    startTx к finalTx за duration секунд — то есть JS всегда точно знает,
+    где визуально находится лента, независимо от того, как конкретный
+    браузер в моменте представляет анимируемый transform. itemW/vw меряются
+    один раз при старте (не меняются за время прокрутки). Возвращает
     stop() — renderReel вызывает её в finish(), когда прокрутка
     (transitionend/таймаут-подстраховка) завершилась. */
-function startReelFocusLoop(viewport) {
+function startReelFocusLoop(viewport, startTx, finalTx, duration, startTime) {
   const track = viewport.querySelector(".reel-track");
   const items = track ? [...track.children] : [];
   const itemW = items.length ? (items[0].getBoundingClientRect().width || 1) : 1;
   const vw = viewport.getBoundingClientRect().width;
   let raf = requestAnimationFrame(function tick() {
-    applyReelFocusAt(track, items, itemW, vw);
+    const elapsed = (performance.now() - startTime) / 1000;
+    const progress = duration > 0 ? Math.max(0, Math.min(1, elapsed / duration)) : 1;
+    const tx = startTx + (finalTx - startTx) * REEL_EASE(progress);
+    applyReelFocusAt(items, itemW, vw, tx);
     raf = requestAnimationFrame(tick);
   });
   return () => cancelAnimationFrame(raf);
@@ -1716,6 +1751,7 @@ function renderReel(container, candidates, targetIndex, animate) {
     const vw = viewport.getBoundingClientRect().width;
     const tx = vw / 2 - (landIndex * itemW + itemW / 2);
     track.style.transform = `translateX(${tx}px)`;
+    return tx;
   };
 
   if (!doAnimate) {
@@ -1737,18 +1773,23 @@ function renderReel(container, candidates, targetIndex, animate) {
     // браузер схлопнёт оба состояния в один кадр.
     track.style.transition = "none";
     track.style.transform = "translateX(0px)";
+    let stopFocusLoop = () => {};
     requestAnimationFrame(() => requestAnimationFrame(() => {
       track.style.transition = "";              // вернуть transition-property/timing-function из styles.css
       track.style.transitionDuration = duration + "s";   // ...но саму длительность — из настроек, не из CSS
-      settle();
+      const finalTx = settle();
+      // startTime — ровно в момент реального старта перехода (тот же кадр,
+      // что и settle()), не раньше — иначе первые тики фокус-цикла посчитают
+      // время, когда лента фактически ещё стояла на 0px (см. двойной rAF
+      // выше), и разъедутся с реальной картинкой.
+      stopFocusLoop = startReelFocusLoop(viewport, 0, finalTx, duration, performance.now());
     }));
-    const stopFocusLoop = startReelFocusLoop(viewport);
     let done = false;
     const finish = () => {
       if (done) return;
       done = true;
       stopFocusLoop();
-      applyReelFocusScale(viewport);   // точный финальный расчёт (rAF-цикл мог отстать на последний кадр) — тот, кто на линии, и есть победитель, settle() уже поставил его туда
+      applyReelFocusScale(viewport);   // точный финальный расчёт — тот, кто на линии, и есть победитель, settle() уже поставил его туда
       resolve();
     };
     track.addEventListener("transitionend", finish, { once: true });
