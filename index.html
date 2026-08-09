@@ -246,6 +246,20 @@
   </div>
 </div>
 
+<!-- ===================== МОДАЛКА: ПОДТВЕРЖДЕНИЕ ИМПОРТА ===================== -->
+<div class="modal-backdrop hidden" id="importConfirmModalBackdrop">
+  <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="importConfirmModalTitle">
+    <div class="modal-head">
+      <h2 id="importConfirmModalTitle">Это те фильмы?</h2>
+      <button class="icon-btn" id="importConfirmModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <p class="muted" id="importConfirmHint"></p>
+    <div id="importConfirmList"></div>
+  </div>
+</div>
+
 <!-- ===================== МОДАЛКА: ГЛОБАЛЬНЫЙ ПОИСК (шапка) ===================== -->
 <div class="modal-backdrop hidden" id="globalSearchModalBackdrop">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="globalSearchModalTitle">

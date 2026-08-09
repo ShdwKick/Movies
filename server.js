@@ -242,6 +242,19 @@ const stmt = {
   countOwners: db.prepare("SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND role = 'owner'"),
 
   movieByKpId: db.prepare("SELECT * FROM movies WHERE kinopoisk_id = ?"),
+  // Для CSV-импорта по title+year (см. importRoomCsv) — сверяемся с уже
+  // закэшированными фильмами ДО похода в сеть. Сравнение без регистра (в
+  // файле могут написать не так, как хранится после нормализации
+  // poiskkino.dev), матчим и по alt_title (частый случай для переводных
+  // названий). year — необязателен (?3/?4 IS NULL пропускает фильтр по
+  // году); при нескольких совпадениях берём подробно закэшированный и
+  // недавно добавленный, а не случайный.
+  findMovieByTitleYear: db.prepare(`
+    SELECT * FROM movies
+     WHERE (LOWER(title) = LOWER(?) OR LOWER(alt_title) = LOWER(?))
+       AND (? IS NULL OR year = ?)
+     ORDER BY detail_cached_at IS NULL, cached_at DESC
+     LIMIT 1`),
   // Витрина «Из базы» на главной (см. GET /api/movies ниже) — просто самые
   // недавно закэшированные фильмы (или в другом порядке — MOVIES_SORT_ORDER
   // ниже), без какой-либо персонализации. Общий счётчик — для пагинации на
@@ -623,56 +636,173 @@ function markSummary(kinopoiskId, userId) {
 }
 
 // ───────────────────────── CSV экспорт/импорт ─────────────────────────
-const CSV_COLUMNS = ["title", "kinopoisk_id", "year", "status", "rating"];
+// Формат — ровно 2 колонки: title, year. Явно так попросили упростить:
+// раньше требовался ещё и kinopoisk_id, который обычный человек в руках не
+// держит. status/rating в экспорт больше не идут (это была персональная
+// проекция «моей» комнаты и «моих» оценок, а не то, чем реально делятся
+// списком), но importRoomCsv ниже их всё ещё ПОНИМАЕТ как необязательные
+// колонки — старые экспорты и файлы, где их дописали руками, не ломаются.
+const CSV_COLUMNS = ["title", "year"];
 
-/** Все фильмы комнаты (очередь + история) → CSV-строка. rating — личная
-    оценка ТЕКУЩЕГО пользователя (movie_marks), не средняя по всем. */
-function exportRoomCsv(roomId, userId) {
-  const rows = stmt.roomMovies.all(roomId).map(r => {
-    const mark = stmt.markGet.get(userId, r.kinopoisk_id);
-    return {
-      title: r.title,
-      kinopoisk_id: r.kinopoisk_id,
-      year: r.year != null ? r.year : "",
-      status: r.rm_status,
-      rating: mark && mark.score != null ? mark.score : "",
-    };
-  });
+/** Все фильмы комнаты (очередь + история) → CSV-строка вида title,year. */
+function exportRoomCsv(roomId) {
+  const rows = stmt.roomMovies.all(roomId).map(r => ({
+    title: r.title,
+    year: r.year != null ? r.year : "",
+  }));
   return csv.stringify(CSV_COLUMNS, rows);
 }
 
 /**
- * Импорт CSV в комнату — по паттерну normList/normTxList из
- * `Финансы/assets/core.js`: чинить что можно (обрезать пробелы, привести
- * rating к числу 1..10, status к queued|watched по умолчанию queued),
- * дропать строки без валидного kinopoisk_id или с фильмом, которого нет в
- * локальном кэше movies — сети на импорте принципиально не касаемся (это
- * может быть много строк, а сходить в poiskkino.dev на каждую — отдельный,
- * не заложенный сюда бюджет запросов; план явно требует именно так).
- * Апсерт по UNIQUE(room_id, kinopoisk_id): уже добавленный фильм не
- * дублируется, только обновляется статус; при валидном rating — апсерт
- * личной оценки (movie_marks) текущего пользователя.
+ * csv.parse() безусловно считает первую строку шапкой и берёт имена колонок
+ * как есть (без приведения регистра) — две проблемы для файла, который
+ * реально принесёт человек:
+ *   1. Файл без шапки (сразу "Матрица,1999" с первой строки) терял бы
+ *      первую запись (её "съедало" бы в заголовок) и разваливал ВСЕ
+ *      остальные строки на «нет названия» — объект получался бы с ключами
+ *      вроде {"Матрица": "1999"}, а не {title, year}.
+ *   2. Шапка не в точности "title,year" (например "Title,Year" — так и
+ *      Excel, и человек от руки вполне могут написать) — rec.title/rec.year
+ *      ниже читаются строго нижним регистром, ключ "Title" их не найдёт, и
+ *      снова все строки уйдут в «нет названия».
+ * Поэтому парсим сами через csv.parseRows: определяем шапку по первой
+ * ячейке первой строки (без регистра — "title" в любом написании), если
+ * шапки нет — читаем ВСЕ строки как данные по фиксированному порядку
+ * CSV_COLUMNS (лишние колонки без шапки всё равно нечем опознать по
+ * позиции — не пытаемся, только title/year), если шапка есть — её имена
+ * тоже приводим к нижнему регистру перед тем, как использовать как ключи.
  */
-function importRoomCsv(roomId, userId, text) {
-  const records = csv.parse(text);
+function parseImportRecords(text) {
+  const rows = csv.parseRows(text);
+  if (!rows.length) return [];
+
+  const hasHeader = String(rows[0][0] || "").trim().toLowerCase() === "title";
+  const header = hasHeader ? rows[0].map(h => String(h).trim().toLowerCase()) : CSV_COLUMNS;
+  const dataRows = hasHeader ? rows.slice(1) : rows;
+  const startLine = hasHeader ? 2 : 1; // __line — номер строки в исходном файле, 1 = первая строка
+
+  const out = [];
+  dataRows.forEach((r, i) => {
+    if (r.length === 1 && r[0] === "") return; // пустая строка в файле
+    const obj = { __line: startLine + i };
+    header.forEach((h, idx) => { obj[h] = r[idx] !== undefined ? r[idx] : ""; });
+    out.push(obj);
+  });
+  return out;
+}
+
+/**
+ * Импорт CSV в комнату — по паттерну normList/normTxList из
+ * `Финансы/assets/core.js`: чинить что можно, дропать то, что нечем
+ * починить, отчитаться отдельной строкой на каждую пропущенную запись.
+ *
+ * Обязательное поле — только title (год сужает поиск, но необязателен).
+ * Фильм ищем в таком порядке:
+ *   1. kinopoisk_id, если он всё же есть в файле (старый экспорт/ручная
+ *      правка) и такой фильм уже закэширован — самый точный и дешёвый путь,
+ *      сеть не трогаем вообще, импортируется сразу.
+ *   2. Локальный кэш movies по title+year (без регистра, см.
+ *      findMovieByTitleYear) — тоже без сети. Если год указан и нашлось
+ *      ТОЧНОЕ совпадение title+year — импортируется сразу.
+ *   3. Если точного совпадения по году нет — поиск по title на
+ *      poiskkino.dev (по объявленному дневному лимиту, см. checkQuota в
+ *      poiskkino.js). Опять же: точное совпадение по year среди
+ *      результатов — сразу в импорт.
+ *   4. Если год в файле не указан вовсе — берём первое найденное по
+ *      названию (локально или первый результат поиска) и импортируем
+ *      сразу: сверять точно не с чем, спрашивать не о чем.
+ *   5. А вот если год В ФАЙЛЕ БЫЛ, но точного совпадения по нему не
+ *      нашлось (ни локально, ни в poiskkino.dev) — фильм по названию при
+ *      этом всё равно есть (локально по title без года, либо просто первый
+ *      результат поиска) — такую строку НЕ импортируем молча, а кладём в
+ *      needsConfirm: попросили явно спрашивать «это тот фильм?», а не
+ *      тихо брать первый попавшийся с несовпадающим годом. Подтверждение
+ *      — отдельный шаг на фронте (см. importCsvInput.onchange в app.js),
+ *      использует уже готовые POST /rooms/:id/movies + watched/rating.
+ *
+ * Апсерт по UNIQUE(room_id, kinopoisk_id): уже добавленный фильм не
+ * дублируется, только обновляется статус; при валидном rating (если такая
+ * колонка есть в файле) — апсерт личной оценки (movie_marks) текущего
+ * пользователя. Для needsConfirm status/rating из строки прикладываются к
+ * элементу отчёта и применяются фронтом уже ПОСЛЕ подтверждения.
+ */
+async function importRoomCsv(roomId, userId, text) {
+  const records = parseImportRecords(text);
   let imported = 0, skipped = 0;
   const errors = [];
+  const needsConfirm = [];
   const ts = now();
 
   for (const rec of records) {
     const line = rec.__line;
 
-    const kpId = parseInt(String(rec.kinopoisk_id ?? "").trim(), 10);
-    if (!Number.isFinite(kpId) || kpId <= 0) {
+    const title = str(rec.title, 300);
+    if (!title) {
       skipped++;
-      errors.push({ line, reason: "нет корректного kinopoisk_id — нечем связать строку с фильмом" });
+      errors.push({ line, reason: "нет названия — нечем связать строку с фильмом" });
       continue;
     }
-    const movie = stmt.movieByKpId.get(kpId);
+
+    const yearRaw = str(rec.year, 10);
+    let year = null;
+    if (yearRaw !== null) {
+      year = parseInt(yearRaw, 10);
+      if (!Number.isFinite(year)) {
+        skipped++;
+        errors.push({ line, reason: `некорректный год «${yearRaw}»` });
+        continue;
+      }
+    }
+
+    let movie = null;      // точное совпадение — импортируем сразу
+    let candidate = null;  // совпадение по названию, год не подтверждён — на согласование
+
+    const kpIdRaw = str(rec.kinopoisk_id, 20);
+    const kpIdHint = kpIdRaw !== null ? parseInt(kpIdRaw, 10) : NaN;
+    if (Number.isFinite(kpIdHint) && kpIdHint > 0) movie = stmt.movieByKpId.get(kpIdHint);
+
     if (!movie) {
-      skipped++;
-      errors.push({ line, reason: `фильм kinopoisk_id=${kpId} отсутствует в локальном кэше — импорт не ходит в сеть, строка пропущена` });
-      continue;
+      if (year != null) {
+        movie = stmt.findMovieByTitleYear.get(title, title, year, year);
+        if (!movie) candidate = stmt.findMovieByTitleYear.get(title, title, null, null);
+      } else {
+        movie = stmt.findMovieByTitleYear.get(title, title, null, null);
+      }
+    }
+
+    if (!movie && !candidate) {
+      let data;
+      try {
+        data = await poiskkino.search(title);
+      } catch (e) {
+        skipped++;
+        errors.push({
+          line,
+          reason: e && e.quota
+            ? "дневной лимит обращений к poiskkino.dev исчерпан — остаток файла можно импортировать завтра"
+            : `poiskkino.dev недоступен: ${e.message}`,
+        });
+        continue;
+      }
+      const found = Array.isArray(data.docs) ? data.docs.map(mapMovie) : [];
+      if (!found.length) {
+        skipped++;
+        errors.push({ line, reason: `фильм «${title}»${year != null ? ` (${year})` : ""} не найден на poiskkino.dev` });
+        continue;
+      }
+      const exact = year != null ? found.find(mv => mv.year === year) : found[0];
+      if (exact) {
+        try {
+          movie = await ensureMovieCached(exact.kinopoiskId);
+        } catch (e) {
+          skipped++;
+          errors.push({ line, reason: `не удалось получить карточку фильма «${title}»: ${e.message}` });
+          continue;
+        }
+      } else {
+        const first = found[0];
+        candidate = { kinopoisk_id: first.kinopoiskId, title: first.title, year: first.year, poster_url: first.posterUrl };
+      }
     }
 
     const statusRaw = str(rec.status, 20);
@@ -685,6 +815,25 @@ function importRoomCsv(roomId, userId, text) {
       if (Number.isFinite(n) && n >= 1 && n <= 10) score = n;
       // иначе — некорректная оценка молча отбрасывается (не дропает всю строку, план: "чинить что можно")
     }
+
+    if (!movie) {
+      // Год в файле был, но точного совпадения не нашлось — candidate тут
+      // всегда есть (иначе строка уже отсеялась бы выше по errors).
+      needsConfirm.push({
+        line,
+        requestedTitle: title,
+        requestedYear: year,
+        kinopoiskId: candidate.kinopoisk_id,
+        title: candidate.title,
+        year: candidate.year,
+        posterUrl: candidate.poster_url,
+        status,
+        rating: score,
+      });
+      continue;
+    }
+
+    const kpId = movie.kinopoisk_id;
 
     const already = stmt.roomMovie.get(roomId, kpId);
     if (!already) {
@@ -705,7 +854,7 @@ function importRoomCsv(roomId, userId, text) {
     imported++;
   }
 
-  return { imported, skipped, errors };
+  return { imported, skipped, errors, needsConfirm };
 }
 
 // ───────────────────────── HTTP ─────────────────────────
@@ -1052,7 +1201,7 @@ async function api(req, res, seg, user, query) {
         "Content-Disposition": 'attachment; filename="room-export.csv"',
         "Cache-Control": "no-store",
       });
-      res.end(exportRoomCsv(roomId, user.id));
+      res.end(exportRoomCsv(roomId));
       return;
     }
 
@@ -1060,7 +1209,7 @@ async function api(req, res, seg, user, query) {
     if (tail[0] === "import" && tail.length === 1) {
       if (m !== "POST") return json(res, 405, { error: "method not allowed" });
       const raw = (await readBody(req, 2 * 1024 * 1024)).toString("utf8");
-      return json(res, 200, importRoomCsv(roomId, user.id, raw));
+      return json(res, 200, await importRoomCsv(roomId, user.id, raw));
     }
 
     // ── фильмы комнаты ─────────────────────────────────────────

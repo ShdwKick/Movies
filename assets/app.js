@@ -1115,8 +1115,64 @@ $("importCsvInput").onchange = async () => {
   await openRoom(roomId);
   const parts = [`импортировано: ${report.imported}`, `пропущено: ${report.skipped}`];
   if (report.errors && report.errors.length) parts.push(`ошибок: ${report.errors.length}`);
+  const needsConfirm = report.needsConfirm || [];
+  if (needsConfirm.length) parts.push(`требует подтверждения: ${needsConfirm.length}`);
   snack("CSV: " + parts.join(", "));
+  if (needsConfirm.length) openImportConfirm(roomId, needsConfirm);
 };
+
+/** Строки импорта, где год из файла не совпал ни с одним найденным
+    вариантом (сервер уже нашёл кандидата по названию — см.
+    importRoomCsv/needsConfirm), но молча брать его не стали — попросили
+    явно спрашивать «это тот фильм?» на каждую такую строку. «Это он»
+    переиспользует обычное добавление в комнату (POST .../movies) +
+    watched/rating из исходной строки CSV; «Пропустить» просто убирает
+    строку из списка, ничего не добавляя. Когда список опустевает — модалка
+    закрывается и комната перечитывается, чтобы подтверждённые фильмы сразу
+    появились в очереди/истории. */
+function openImportConfirm(roomId, items) {
+  $("importConfirmHint").textContent = items.length === 1
+    ? "Год из файла не совпал — вот что нашлось по названию."
+    : `Год из файла не совпал у ${items.length} фильмов — вот что нашлось по названию.`;
+  const list = $("importConfirmList");
+  list.textContent = "";
+  for (const item of items) list.append(renderImportConfirmRow(roomId, item));
+  openModal("importConfirmModalBackdrop");
+}
+
+function renderImportConfirmRow(roomId, item) {
+  const card = el("div", "movie-card");
+  const foundYear = item.year ? ` (${item.year})` : "";
+  const reqYear = item.requestedYear != null ? ` (${item.requestedYear})` : "";
+  card.innerHTML = `
+    <div class="movie-card-head">
+      ${item.posterUrl ? `<img class="movie-poster" src="${esc(item.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
+      <div class="movie-info">
+        <div class="muted">В файле: ${esc(item.requestedTitle)}${esc(reqYear)}</div>
+        <div class="title">${esc(item.title || "")}${esc(foundYear)}</div>
+      </div>
+    </div>
+    <div class="row">
+      <button class="btn filled sm" type="button" data-act="yes">Это он</button>
+      <button class="btn outlined sm" type="button" data-act="skip">Пропустить</button>
+    </div>`;
+  card.querySelector('[data-act="yes"]').onclick = () => act(async () => {
+    await api(`/rooms/${roomId}/movies`, { method: "POST", body: { kinopoiskId: item.kinopoiskId } });
+    if (item.status === "watched") await api(`/rooms/${roomId}/movies/${item.kinopoiskId}/watched`, { method: "POST" });
+    if (item.rating != null) await api(`/movies/${item.kinopoiskId}/rating`, { method: "PUT", body: { score: item.rating } });
+    finishImportConfirmRow(card, roomId);
+  });
+  card.querySelector('[data-act="skip"]').onclick = () => finishImportConfirmRow(card, roomId);
+  return card;
+}
+
+function finishImportConfirmRow(card, roomId) {
+  card.remove();
+  if (!$("importConfirmList").children.length) {
+    closeModal("importConfirmModalBackdrop");
+    openRoom(roomId);
+  }
+}
 
 // «Перевыпустить код» — иконка рядом с самим кодом (в .code-box), не отдельная
 // текстовая кнопка. Отключить приглашение из интерфейса теперь нельзя —
@@ -1285,6 +1341,7 @@ function bindModal(backdropId, openBtnId, closeBtnId) {
 
 bindModal("membersModalBackdrop", "membersBtn", "membersModalClose");
 bindModal("addMovieModalBackdrop", "addMovieBtn", "addMovieModalClose");
+bindModal("importConfirmModalBackdrop", null, "importConfirmModalClose");
 
 // Модалка «Фильм» (плитка витрины «Из базы») — своей кнопки-открывашки нет,
 // открывается из renderMovieTile() по клику на конкретную плитку.
