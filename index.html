@@ -41,10 +41,16 @@
       <span class="bh-service">Что смотрим?</span>
     </a>
     <div class="spacer"></div>
+    <div class="header-search" id="globalSearchWrap" hidden>
+      <svg class="icon sm header-search-icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input type="text" id="globalSearchInput" placeholder="Название фильма" maxlength="200" autocomplete="off">
+      <button class="icon-btn xs" id="globalSearchClearBtn" title="Очистить" aria-label="Очистить" hidden>
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <div class="header-search-results" id="globalSearchResults" hidden></div>
+    </div>
+    <div class="spacer"></div>
     <button class="icon-btn" id="themeBtn" title="Тема" aria-label="Тема"></button>
-    <button class="icon-btn" id="globalSearchBtn" hidden title="Поиск фильмов" aria-label="Поиск фильмов" aria-haspopup="dialog">
-      <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-    </button>
     <button class="icon-btn" id="serviceProfileBtn" hidden title="Мои фильмы" aria-label="Мои фильмы">
       <svg class="icon" viewBox="0 0 24 24"><path d="M6 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v16l-6-4-6 4V4z"/></svg>
     </button>
@@ -77,6 +83,11 @@
   <h1>Мои комнаты</h1>
   <p class="muted" id="roomsEmpty">Комнат пока нет — создайте первую.</p>
   <div id="roomList"></div>
+  <div class="pager hidden" id="roomsPager">
+    <button class="btn outlined sm" id="roomsPrevBtn">← Назад</button>
+    <span class="muted" id="roomsPagerLabel"></span>
+    <button class="btn outlined sm" id="roomsNextBtn">Вперёд →</button>
+  </div>
   <div class="bar">
     <input type="text" id="newRoomTitle" placeholder="Название комнаты" maxlength="200">
     <button class="btn filled" id="createRoomBtn">Создать</button>
@@ -90,11 +101,10 @@
 
   <!-- Поиск фильмов прямо на главной, над витриной — тот же принцип, что в
        браузерных онлайн-кинотеатрах: результаты появляются под строкой
-       поиска по мере ввода и уходят вниз страницы, а не всплывающим окном
-       (в отличие от #globalSearchModalBackdrop в шапке — та осталась,
-       здесь просто ещё один вход к тому же /api/search, см. app.js). Сами
-       строки результата — переиспользованный renderSearchResultRow, тот же
-       компонент, что и в модалке. -->
+       поиска по мере ввода и уходят вниз страницы (в отличие от поиска в
+       шапке, #globalSearchWrap — там результаты выпадающей панелью, шапка
+       общая на все экраны, страницы под ней нет). Сами строки результата —
+       переиспользованный renderSearchResultRow, тот же компонент. -->
   <div id="homeSearchWrap">
     <div class="search-row">
       <input type="text" id="homeSearchInput" placeholder="Искать фильмы по названию…">
@@ -257,28 +267,6 @@
     </div>
     <p class="muted" id="importConfirmHint"></p>
     <div id="importConfirmList"></div>
-  </div>
-</div>
-
-<!-- ===================== МОДАЛКА: ГЛОБАЛЬНЫЙ ПОИСК (шапка) ===================== -->
-<div class="modal-backdrop hidden" id="globalSearchModalBackdrop">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="globalSearchModalTitle">
-    <div class="modal-head">
-      <h2 id="globalSearchModalTitle">Поиск фильмов</h2>
-      <button class="icon-btn" id="globalSearchModalClose" aria-label="Закрыть">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
-    </div>
-    <div class="search-row">
-      <input type="text" id="globalSearchInput" placeholder="Название фильма" maxlength="200">
-      <button class="icon-btn tonal" id="globalSearchSubmitBtn" title="Искать" aria-label="Искать">
-        <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-      </button>
-    </div>
-    <div id="globalSearchResults"></div>
-    <div class="row">
-      <button class="btn tonal" id="globalSearchDoneBtn">Готово</button>
-    </div>
   </div>
 </div>
 

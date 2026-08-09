@@ -135,6 +135,33 @@ a{color:var(--md-sys-color-primary)}
 .appbar .bh-lockup:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:4px;border-radius:6px}
 .content{max-width:1080px;margin:0 auto;padding:8px clamp(12px,4vw,24px) 96px}
 
+/* Поиск в шапке — компактное поле по центру (два .spacer в appbar-inner по
+   обе стороны от него центрируют его между лого и кнопками справа),
+   растёт в ширину по фокусу (тот же принцип живого поиска, что у
+   #homeSearchWrap на главной, см. runGlobalSearch в app.js) — но результаты
+   тут не часть потока страницы (шапка общая на все экраны), а выпадающая
+   панель под полем. */
+.header-search{
+  position:relative;display:flex;align-items:center;gap:.4rem;
+  width:11rem;max-width:38vw;flex:none;
+  padding:0 .6rem;border-radius:999px;
+  border:1px solid var(--md-sys-color-outline-variant);
+  background:var(--md-sys-color-surface-container-lowest);
+  transition:width .2s var(--ease-std),border-color .15s;
+}
+.header-search:focus-within{width:22rem;max-width:60vw;border-color:var(--md-sys-color-primary)}
+.header-search-icon{flex:none;color:var(--md-sys-color-on-surface-variant)}
+.header-search input[type="text"]{flex:1;min-width:0;border:none;background:none;padding:9px 0;font-size:14px}
+.header-search input[type="text"]:focus{border:none}
+.header-search-results{
+  position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);
+  width:26rem;max-width:90vw;max-height:70vh;overflow-y:auto;z-index:30;
+  background:var(--md-sys-color-surface-container-low);
+  border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-l);
+  box-shadow:var(--e2);padding:.6rem;
+}
+
 /* ===================== КНОПКИ ===================== */
 .btn{
   display:inline-flex;align-items:center;justify-content:center;gap:8px;
@@ -262,6 +289,12 @@ select{
   box-shadow:var(--e1);transition:box-shadow .18s,border-color .18s;
 }
 .movie-card:hover{box-shadow:var(--e2)}
+/* Карточки очереди/истории/watched/личного списка целиком кликабельны —
+   клик открывает модалку «Фильм» (bindMovieCardInfoOpen в app.js), курсор
+   должен читаться как «тут можно нажать» так же, как у .movie-tile/
+   .movie-card-pick (плитка витрины и результат локального поиска). */
+.movie-card-clickable{cursor:pointer}
+.movie-card-clickable:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
 .movie-card::before{
   content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
   background:linear-gradient(to top,var(--flame-base),var(--flame-tip));opacity:.7;
@@ -590,6 +623,21 @@ select{
 .title-actions{display:flex;align-items:center;gap:.1rem;margin-top:1.1rem}
 .title-actions .menu-wrap{margin-top:0}
 .appbar-inner .menu-wrap{margin-top:0}
+/* «Мой список» — кнопка «…» только по наведению/фокусу карточки (тот же
+   приём, что и у бейджа «Добавить в…» на плитке витрины, см.
+   .movie-tile-poster-wrap .menu-wrap ниже), только на устройствах с
+   реальным hover — на тач-экранах кнопка остаётся всегда видимой, иначе
+   станет недостижимой. Ограничено ИМЕННО этими двумя контейнерами (не
+   всеми .title-actions .menu-wrap) — у очереди/истории/watched кнопка
+   действий видна всегда, тут просили именно про личный список. */
+@media(hover:hover){
+  #myListItems .title-actions .menu-wrap,
+  #profileMyListItems .title-actions .menu-wrap{opacity:0;transition:opacity .15s var(--ease-std)}
+  #myListItems .movie-card:hover .title-actions .menu-wrap,
+  #myListItems .movie-card:focus-within .title-actions .menu-wrap,
+  #profileMyListItems .movie-card:hover .title-actions .menu-wrap,
+  #profileMyListItems .movie-card:focus-within .title-actions .menu-wrap{opacity:1}
+}
 
 .menu{
   position:absolute;right:0;top:calc(100% + 6px);min-width:11.5rem;z-index:10;

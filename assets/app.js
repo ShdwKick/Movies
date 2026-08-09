@@ -150,7 +150,7 @@ async function init() {
   state.me = auth.getUser() || state.me;
 
   $("accountMenuWrap").hidden = false;
-  $("globalSearchBtn").hidden = false;
+  $("globalSearchWrap").hidden = false;
   $("serviceProfileBtn").hidden = false;
   $("accountBtn").title = "Аккаунт — " + who(state.me);
 
@@ -161,7 +161,7 @@ async function init() {
 function showAuthScreen(title, note) {
   showOnly("authView");
   $("accountMenuWrap").hidden = true;
-  $("globalSearchBtn").hidden = true;
+  $("globalSearchWrap").hidden = true;
   $("serviceProfileBtn").hidden = true;
   closeAccountMenu();
   $("authTitle").textContent = title;
@@ -200,7 +200,7 @@ async function route() {
   if (hash === "#/profile") return showProfile();
   return showRooms();
 }
-addEventListener("hashchange", () => { route().catch(console.error); });
+addEventListener("hashchange", () => { closeGlobalSearch(); route().catch(console.error); });
 
 // ───────────────────────── список комнат ─────────────────────────
 async function showRooms() {
@@ -277,9 +277,9 @@ $("cachedNextBtn").onclick = () => {
 };
 
 // Поиск фильмов прямо на главной, над витриной (#homeSearchWrap в index.html)
-// — тот же /api/search и тот же renderSearchResultRow, что и у модалки
-// #globalSearchModalBackdrop в шапке (см. runGlobalSearch/renderGlobalSearchResults
-// ниже по файлу), просто без модалки: результаты появляются под строкой
+// — тот же /api/search и тот же renderSearchResultRow, что и у поиска в
+// шапке (см. runGlobalSearch/renderGlobalSearchResults ниже по файлу, тот
+// же принцип живого поиска), только тут результаты появляются под строкой
 // поиска и уходят вниз страницы по мере ввода (принцип как в браузерных
 // онлайн-кинотеатрах), а витрина «Из базы» на это время прячется — иначе на
 // экране были бы одновременно два конкурирующих списка фильмов. Пустая
@@ -430,6 +430,38 @@ function renderMovieInfoModal(mv, rooms) {
   menuWrapBox.append(renderAddToMenu(mv.kinopoiskId, rooms));
   body.querySelector("#movieInfoWatchBtn").onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
   body.querySelector("#movieInfoKpBtn").onclick = () => window.open(kinopoiskRuUrl(mv.kinopoiskId), "_blank", "noopener");
+}
+
+/** Открывает модалку «Фильм» для карточки НЕ с витрины (очередь/история/
+    watched/мой список) — у этих карточек moviePayload и так уже полный
+    (director/actors/description закэшированы сервером, см. moviePayload),
+    отдельного похода за деталями не нужно, но список комнат для «Добавить
+    в…» в шапке модалки свежий не помешает (могли создать комнату в другой
+    вкладке) — грузим его тут же, как и у глобального/локального поиска. */
+async function openMovieInfoModal(mv) {
+  const roomsData = await act(() => api("/rooms"));
+  renderMovieInfoModal(mv, roomsData ? roomsData.rooms : []);
+  openModal("movieInfoModalBackdrop");
+}
+
+/** Делает всю карточку (очередь/история/watched/мой список — везде, КРОМЕ
+    результатов поиска, у них своя логика с подгрузкой деталей по клику на
+    "Подробнее", см. bindMovieDetailToggle) кликабельной для открытия той же
+    модалки «Фильм», что у плитки витрины — единый способ посмотреть полную
+    карточку фильма по всему сервису. Все интерактивные элементы ВНУТРИ
+    карточки (кнопки меню, "Смотреть", звёзды оценки) — это <button>,
+    поэтому единая проверка e.target.closest("button") отсекает клики по
+    ним, не давая им всплыть в открытие модалки. */
+function bindMovieCardInfoOpen(card, mv) {
+  card.classList.add("movie-card-clickable");
+  card.setAttribute("role", "button");
+  card.tabIndex = 0;
+  const open = () => openMovieInfoModal(mv);
+  card.addEventListener("click", e => { if (!e.target.closest("button")) open(); });
+  card.addEventListener("keydown", e => {
+    if (e.target.closest("button")) return;
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+  });
 }
 
 function renderRooms() {
@@ -966,13 +998,10 @@ function renderMovieCard(rm, room) {
             <div class="title">${esc(mv.title)}${esc(year)}</div>
             <div class="chip-row">${movieChipsHtml(mv)}</div>
           </div>
-          <div class="movie-card-footer">
-            <button class="btn tonal" data-act="watch" type="button">Смотреть</button>
-          </div>
         </div>
       </div>
       <div class="title-actions">
-        <button class="icon-btn xs" data-act="more" type="button" title="Подробнее" aria-label="Подробнее" aria-expanded="false">${CHEVRON_DOWN_ICON}</button>
+        <button class="icon-btn xs" data-act="watch" type="button" title="Смотреть" aria-label="Смотреть">${PLAY_ICON}</button>
         <div class="menu-wrap">
           <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Действия с фильмом" aria-label="Действия с фильмом" aria-haspopup="true" aria-expanded="false">
             <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
@@ -983,10 +1012,9 @@ function renderMovieCard(rm, room) {
           </div>
         </div>
       </div>
-    </div>
-    <div class="movie-detail hidden"></div>`;
+    </div>`;
 
-  bindMovieDetailToggle(card, mv);
+  bindMovieCardInfoOpen(card, mv);
   bindMovieCardMenu(card);
 
   card.querySelector('[data-act="watched"]').onclick = () => act(async () => {
@@ -1057,6 +1085,7 @@ function renderHistoryCard(rm, room, members) {
     </div>`;
 
   bindMovieCardMenu(card);
+  bindMovieCardInfoOpen(card, mv);
 
   card.querySelector('[data-act="watched"]').onclick = () => act(async () => {
     closeCardMenu();
@@ -1307,7 +1336,7 @@ document.addEventListener("click", e => {
 });
 document.addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
-  closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCardMenu();
+  closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCardMenu(); closeGlobalSearch();
   if (openModalId) closeModal(openModalId);
 });
 
@@ -1340,43 +1369,79 @@ function bindModal(backdropId, openBtnId, closeBtnId) {
 }
 
 bindModal("membersModalBackdrop", "membersBtn", "membersModalClose");
-bindModal("addMovieModalBackdrop", "addMovieBtn", "addMovieModalClose");
+bindModal("addMovieModalBackdrop", null, "addMovieModalClose");
 bindModal("importConfirmModalBackdrop", null, "importConfirmModalClose");
+// Свой обработчик открытия (не через bindModal) — сбрасывает старый
+// запрос/результаты ПЕРЕД открытием, иначе повторное открытие в той же
+// комнате показывало бы то, что искали в прошлый раз (тот же баг, что уже
+// был у globalSearchBtn ниже, и там уже почищен точно так же).
+$("addMovieBtn").onclick = () => {
+  $("movieSearchInput").value = "";
+  $("movieSearchResults").textContent = "";
+  openModal("addMovieModalBackdrop");
+};
 
 // Модалка «Фильм» (плитка витрины «Из базы») — своей кнопки-открывашки нет,
 // открывается из renderMovieTile() по клику на конкретную плитку.
 bindModal("movieInfoModalBackdrop", null, "movieInfoModalClose");
 
 // ───────────────────────── глобальный поиск (шапка, любая комната) ─────────────────────────
-// По сути то же самое, что модалка «Добавить фильм» внутри комнаты выше, но
-// без заранее известной комнаты: у каждого результата — компактное меню
-// «Добавить в…» (renderAddToMenu) вместо клика по всей карточке (см. план
-// задачи 4).
-bindModal("globalSearchModalBackdrop", null, "globalSearchModalClose");
-$("globalSearchDoneBtn").onclick = () => closeModal("globalSearchModalBackdrop");
-$("globalSearchBtn").onclick = () => {
+// Больше не модалка — тот же принцип, что у поиска на главной
+// (runHomeSearch/renderHomeSearchResults выше): живой поиск по мере ввода
+// (debounce), результаты сами всплывают под полем. Разница только в том,
+// что здесь некуда «раздвинуть» страницу под результаты — шапка одна на
+// весь сервис, поверх любого экрана, поэтому результаты — не часть потока
+// страницы, а выпадающая панель (.header-search-results, position:absolute
+// от .header-search, см. styles.css), которая закрывается кликом снаружи,
+// Escape или переходом на другой экран (hashchange). У каждого результата
+// — компактное меню «Добавить в…» (renderAddToMenu), комната заранее не
+// известна.
+function closeGlobalSearch() {
+  $("globalSearchResults").hidden = true;
+}
+
+let globalSearchDebounce = null;
+$("globalSearchInput").addEventListener("input", () => {
+  $("globalSearchClearBtn").hidden = !$("globalSearchInput").value;
+  clearTimeout(globalSearchDebounce);
+  globalSearchDebounce = setTimeout(runGlobalSearch, 300);
+});
+$("globalSearchInput").addEventListener("focus", () => {
+  if ($("globalSearchInput").value.trim()) $("globalSearchResults").hidden = false;
+});
+$("globalSearchInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") { clearTimeout(globalSearchDebounce); runGlobalSearch(); }
+  else if (e.key === "Escape") { e.target.blur(); closeGlobalSearch(); }
+});
+$("globalSearchClearBtn").onclick = () => {
   $("globalSearchInput").value = "";
+  $("globalSearchClearBtn").hidden = true;
+  clearTimeout(globalSearchDebounce);
+  closeGlobalSearch();
   $("globalSearchResults").textContent = "";
-  openModal("globalSearchModalBackdrop");
 };
+document.addEventListener("click", e => {
+  if (!$("globalSearchWrap").contains(e.target)) closeGlobalSearch();
+});
 
 async function runGlobalSearch() {
   const q = $("globalSearchInput").value.trim();
-  if (!q) return;
-  $("globalSearchResults").textContent = "";
+  clearTimeout(globalSearchDebounce);
+  if (!q) { closeGlobalSearch(); return; }
   const data = await act(() => api("/search?q=" + encodeURIComponent(q)));
   if (!data) return;
-  // Список комнат — свежий на каждый поиск: пока модалка открыта, человек
-  // вполне мог создать новую комнату в другой вкладке/раньше в этой сессии.
+  // Запрос мог устареть, пока летел (строку успели стереть/поменять) — не
+  // подсовываем результат уже не тому вводу (та же защита, что у
+  // runHomeSearch).
+  if ($("globalSearchInput").value.trim() !== q) return;
   const roomsData = await act(() => api("/rooms"));
   renderGlobalSearchResults(data.movies, roomsData ? roomsData.rooms : []);
 }
-$("globalSearchSubmitBtn").onclick = runGlobalSearch;
-$("globalSearchInput").addEventListener("keydown", e => { if (e.key === "Enter") runGlobalSearch(); });
 
 function renderGlobalSearchResults(movies, rooms) {
   const box = $("globalSearchResults");
   box.textContent = "";
+  box.hidden = false;
   openCardMenu = null; // старые строки со своими меню «Добавить в…» уходят целиком
   if (!movies.length) { box.append(el("p", "muted", "Ничего не нашлось.")); return; }
   for (const mv of movies) box.append(renderSearchResultRow(mv, rooms));
@@ -2166,25 +2231,54 @@ function renderWatchedInto(container, items) {
     const year = mv.year ? ` (${mv.year})` : "";
     const avgText = it.avgScore != null ? `средняя ${it.avgScore}${it.ratingCount > 1 ? ` (${it.ratingCount})` : ""}` : "Средней оценки пока нет";
     card.innerHTML = `
-      <div class="movie-card-head">
-        ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
-        <div class="movie-info">
-          <div class="movie-info-top">
-            <div class="title">${esc(mv.title)}${esc(year)}</div>
-            <div class="chip-row">${movieChipsHtml(mv)}</div>
-            <div class="score-row">
-              <div data-act="rating"></div>
-              <span class="muted">${esc(avgText)}</span>
+      <div class="title-row">
+        <div class="movie-card-head">
+          ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
+          <div class="movie-info">
+            <div class="movie-info-top">
+              <div class="title">${esc(mv.title)}${esc(year)}</div>
+              <div class="chip-row">${movieChipsHtml(mv)}</div>
+              <div class="score-row">
+                <div data-act="rating"></div>
+                <span class="muted">${esc(avgText)}</span>
+              </div>
+            </div>
+            <div class="movie-card-footer">
+              <button class="btn tonal" data-act="watch">Смотреть</button>
             </div>
           </div>
-          <div class="movie-card-footer">
-            <button class="btn tonal" data-act="watch">Смотреть</button>
+        </div>
+        <div class="title-actions">
+          <div class="menu-wrap">
+            <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Действия с фильмом" aria-label="Действия с фильмом" aria-haspopup="true" aria-expanded="false">
+              <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
+            </button>
+            <div class="menu" data-act="cardMenu" hidden></div>
           </div>
         </div>
       </div>`;
 
     card.querySelector('[data-act="watch"]').onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
     renderRatingToggle(card.querySelector('[data-act="rating"]'), mv.kinopoiskId, it.myScore);
+
+    // «Добавить в комнату» — единственный пункт меню-«…», тем же приёмом,
+    // что и в renderMyListInto: клик подгружает список комнат и подменяет
+    // .menu на renderRoomPicker. stopPropagation на menu-wrap — та же защита
+    // от закрытия меню самим собой при подмене содержимого (см. подробный
+    // комментарий в renderMyListInto).
+    card.querySelector(".menu-wrap").onclick = e => e.stopPropagation();
+    const menu = card.querySelector('[data-act="cardMenu"]');
+    menu.innerHTML = '<button class="menu-item" data-act="addRoom">Добавить в комнату</button>';
+    menu.querySelector('[data-act="addRoom"]').onclick = async () => {
+      menu.innerHTML = '<p class="muted" style="padding:.5em .8em">Загрузка…</p>';
+      const data = await act(() => api("/rooms"));
+      if (!data || menu.hidden) return;
+      menu.innerHTML = "";
+      renderRoomPicker(menu, mv.kinopoiskId, data.rooms, () => closeCardMenu());
+    };
+    bindMovieCardMenu(card);
+
+    bindMovieCardInfoOpen(card, mv);
 
     container.append(card);
   }
@@ -2237,12 +2331,10 @@ function renderMyListInto(container, items, onChange) {
               <div class="title">${esc(mv.title)}${esc(year)}</div>
               <div class="chip-row">${movieChipsHtml(mv)}</div>
             </div>
-            <div class="movie-card-footer">
-              <button class="btn tonal" data-act="watch">Смотреть</button>
-            </div>
           </div>
         </div>
         <div class="title-actions">
+          <button class="icon-btn xs" data-act="watch" type="button" title="Смотреть" aria-label="Смотреть">${PLAY_ICON}</button>
           <div class="menu-wrap">
             <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Действия с фильмом" aria-label="Действия с фильмом" aria-haspopup="true" aria-expanded="false">
               <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
@@ -2293,6 +2385,8 @@ function renderMyListInto(container, items, onChange) {
         bindMenuItems();
       }
     };
+
+    bindMovieCardInfoOpen(card, mv);
 
     container.append(card);
   }
