@@ -409,7 +409,7 @@ function renderMovieInfoModal(mv, rooms) {
     <div class="movie-info-sep"></div>
     <div class="movie-detail"></div>
     <div class="row movie-info-actions">
-      <button class="btn filled" id="movieInfoWatchBtn">Смотреть</button>
+      <button class="btn filled" id="movieInfoWatchBtn">${PLAY_ICON}<span>Смотреть</span></button>
       <button class="btn outlined" id="movieInfoKpBtn">Страница на Кинопоиске</button>
     </div>`;
 
@@ -433,26 +433,36 @@ function renderMovieInfoModal(mv, rooms) {
   body.querySelector("#movieInfoKpBtn").onclick = () => window.open(kinopoiskRuUrl(mv.kinopoiskId), "_blank", "noopener");
 }
 
-/** Открывает модалку «Фильм» для карточки НЕ с витрины (очередь/история/
-    watched/мой список) — у этих карточек moviePayload и так уже полный
-    (director/actors/description закэшированы сервером, см. moviePayload),
-    отдельного похода за деталями не нужно, но список комнат для «Добавить
-    в…» в шапке модалки свежий не помешает (могли создать комнату в другой
-    вкладке) — грузим его тут же, как и у глобального/локального поиска. */
+/** Открывает модалку «Фильм» для ЛЮБОЙ карточки по всему сервису — очередь/
+    история/watched/мой список (moviePayload у них и так уже полный,
+    director/actors/description закэшированы сервером) И результаты поиска
+    (renderMovieResultCard/renderSearchResultRow) — у результатов /api/search
+    этих полей ещё нет (undefined, не пустой массив — так отличаем «не
+    грузили» от «пусто»), поэтому сначала лениво подгружаем полную карточку
+    через GET /api/movies/:id (тот же ensureMovieCached, что и добавление —
+    заодно кэшируется на сервере) и пишем результат прямо в mv, чтобы
+    повторное открытие той же карточки в этой сессии фронта уже не ходило в
+    сеть. Список комнат для «Добавить в…» в шапке модалки — свежий при
+    каждом открытии (могли создать комнату в другой вкладке). */
 async function openMovieInfoModal(mv) {
+  const hasSomething = mv.director || (mv.actors && mv.actors.length) || mv.description;
+  if (!hasSomething && !mv.__detailsLoaded) {
+    const data = await act(() => api(`/movies/${mv.kinopoiskId}`));
+    if (!data) return;
+    Object.assign(mv, data);
+    mv.__detailsLoaded = true;
+  }
   const roomsData = await act(() => api("/rooms"));
   renderMovieInfoModal(mv, roomsData ? roomsData.rooms : []);
   openModal("movieInfoModalBackdrop");
 }
 
-/** Делает всю карточку (очередь/история/watched/мой список — везде, КРОМЕ
-    результатов поиска, у них своя логика с подгрузкой деталей по клику на
-    "Подробнее", см. bindMovieDetailToggle) кликабельной для открытия той же
-    модалки «Фильм», что у плитки витрины — единый способ посмотреть полную
-    карточку фильма по всему сервису. Все интерактивные элементы ВНУТРИ
-    карточки (кнопки меню, "Смотреть", звёзды оценки) — это <button>,
-    поэтому единая проверка e.target.closest("button") отсекает клики по
-    ним, не давая им всплыть в открытие модалки. */
+/** Делает всю карточку (очередь/история/watched/мой список) кликабельной
+    для открытия той же модалки «Фильм», что и у плитки витрины — единый
+    способ посмотреть полную карточку фильма по всему сервису. Все
+    интерактивные элементы ВНУТРИ карточки (кнопки меню, "Смотреть", звёзды
+    оценки) — это <button>, поэтому единая проверка e.target.closest("button")
+    отсекает клики по ним, не давая им всплыть в открытие модалки. */
 function bindMovieCardInfoOpen(card, mv) {
   card.classList.add("movie-card-clickable");
   card.setAttribute("role", "button");
@@ -612,7 +622,8 @@ function renderMovieResultRow(mv) {
     комнату и закрывает модалку (см. план: убрали кнопку «Добавить» и кнопку
     «Готово» разом — сценарий добавления нескольких фильмов подряд ушёл).
     Настоящий <button> для всей карточки не подходит: внутри есть icon-btn
-    «Подробнее» (bindMovieDetailToggle), а <button> внутри <button> невалиден
+    «Подробнее» (открывает модалку «Фильм» — openMovieInfoModal, та же, что
+    и у остальных карточек по сервису), а <button> внутри <button> невалиден
     — поэтому div с role="button"/tabindex + свой keydown на Enter/Space.
     renderMovieResultRow — общая шапка (постер+инфо), её не трогаем: тот же
     компонент используют результаты ГЛОБАЛЬНОГО поиска (renderSearchResultRow)
@@ -629,12 +640,12 @@ function renderMovieResultCard(mv) {
   moreBtn.dataset.act = "more";
   moreBtn.title = "Подробнее";
   moreBtn.setAttribute("aria-label", "Подробнее");
-  moreBtn.setAttribute("aria-expanded", "false");
   moreBtn.innerHTML = CHEVRON_DOWN_ICON;
+  // stopPropagation — клик по стрелке не должен всплывать до card.onclick и
+  // триггерить добавление фильма (карточка кликабельна целиком, см. ниже).
+  moreBtn.onclick = e => { e.stopPropagation(); openMovieInfoModal(mv); };
   head.append(moreBtn);
-  card.append(head, el("div", "movie-detail hidden"));
-
-  bindMovieDetailToggle(card, mv);
+  card.append(head);
 
   const addMovie = () => act(async () => {
     const roomId = state.room.room.id;
@@ -645,6 +656,7 @@ function renderMovieResultCard(mv) {
   }, "Фильм добавлен");
   card.onclick = addMovie;
   card.addEventListener("keydown", e => {
+    if (e.target.closest("button")) return;
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); addMovie(); }
   });
 
@@ -690,8 +702,8 @@ function renderRoomPicker(container, kinopoiskId, rooms, onAdded) {
 
 /** Строка результата глобального поиска (шапка, любая комната) — та же
     шапка постер+инфо, что и у карточки локального поиска
-    (renderMovieResultRow), плюс своя стрелка «Подробнее»
-    (bindMovieDetailToggle) и компактное меню «Добавить в…»
+    (renderMovieResultRow), плюс своя стрелка «Подробнее» (открывает модалку
+    «Фильм» — openMovieInfoModal) и компактное меню «Добавить в…»
     (renderAddToMenu) — комната заранее не известна, поэтому вся строка НЕ
     кликабельна целиком (в отличие от renderMovieResultCard): добавление
     только через меню, где нужно выбрать цель. */
@@ -704,15 +716,14 @@ function renderSearchResultRow(mv, rooms) {
   moreBtn.dataset.act = "more";
   moreBtn.title = "Подробнее";
   moreBtn.setAttribute("aria-label", "Подробнее");
-  moreBtn.setAttribute("aria-expanded", "false");
   moreBtn.innerHTML = CHEVRON_DOWN_ICON;
+  moreBtn.onclick = () => openMovieInfoModal(mv);
 
   const headActions = el("div", "movie-card-head-actions");
   headActions.append(moreBtn, renderAddToMenu(mv.kinopoiskId, rooms));
   head.append(headActions);
 
-  wrap.append(head, el("div", "movie-detail hidden"));
-  bindMovieDetailToggle(wrap, mv);
+  wrap.append(head);
   return wrap;
 }
 
@@ -812,89 +823,6 @@ function renderRatingToggle(container, kinopoiskId, currentScore, onRated) {
     container.append(btn);
   };
   if (currentScore) showChip(); else showStars();
-}
-
-/** «Подробнее» — раскрывающийся блок с режиссёром/актёрами/описанием, общий
-    для карточки очереди (renderMovieCard) и карточки результата поиска
-    (renderMovieResultCard). У карточки ИСТОРИИ (renderHistoryCard) стрелки и
-    разворота больше нет — там короткое описание показано в теле карточки
-    всегда, см. .movie-desc-preview в styles.css и план задачи «карточки
-    истории». Кнопка — компактная иконка-шеврон (не текстовая .btn, см. план
-    задачи 2): переворачивается на 180° при разворачивании,
-    .icon-btn.expanded .chevron{transform:rotate(180deg)} в styles.css;
-    общий свитч prefers-reduced-motion там же гасит анимацию. */
-function bindMovieDetailToggle(card, mv) {
-  const btn = card.querySelector('[data-act="more"]');
-  btn.onclick = e => {
-    // Карточка результата поиска в модалке «Добавить фильм» кликабельна
-    // целиком (см. renderMovieResultCard) — клик по стрелке не должен
-    // всплывать до card.onclick и триггерить добавление фильма. Для
-    // карточек очереди/истории (без клика на всей карточке) stopPropagation
-    // безвреден.
-    e.stopPropagation();
-    const box = card.querySelector(".movie-detail");
-    const willShow = box.classList.contains("hidden");
-    box.classList.toggle("hidden");
-    btn.classList.toggle("expanded", willShow);
-    btn.setAttribute("aria-expanded", String(willShow));
-    // Очередь — сетка .queue-grid: .expanded на самой карточке растягивает
-    // её на всю ширину ряда (grid-column:1/-1 в styles.css), соседние
-    // карточки сами переставляются грид-раскладкой, без JS-пересчёта. Вне
-    // .queue-grid (карточка результата поиска, тоже через
-    // bindMovieDetailToggle) класс ни на что не влияет — там такого CSS-
-    // правила нет.
-    card.classList.toggle("expanded", willShow);
-    const label = willShow ? "Свернуть" : "Подробнее";
-    btn.title = label;
-    btn.setAttribute("aria-label", label);
-    if (willShow) {
-      renderMovieDetail(box, mv);
-    }
-  };
-}
-
-/** Рисует режиссёра/актёров/описание в уже раскрытый .movie-detail. Если у mv
-    ещё нет ни одного из этих полей — результат /api/search (в отличие от
-    закэшированной карточки moviePayload там их вовсе нет, не пустой массив, а
-    undefined) — сначала подгружает полную карточку через GET /api/movies/:id
-    (тот же ensureMovieCached, что и добавление в комнату/личный список, так
-    что заодно и кэшируется на сервере), пишет результат прямо в mv, чтобы
-    повторное раскрытие этой же карточки в текущей сессии фронта уже не ходило
-    в сеть — и только потом рендерит. */
-async function renderMovieDetail(box, mv) {
-  const hasSomething = mv.director || (mv.actors && mv.actors.length) || mv.description;
-  if (!hasSomething && !mv.__detailsLoaded) {
-    box.innerHTML = '<div class="detail-spinner" aria-label="Загрузка…"></div>';
-    try {
-      const data = await api(`/movies/${mv.kinopoiskId}`);
-      Object.assign(mv, data);
-      mv.__detailsLoaded = true;
-    } catch {
-      // Свернули, пока запрос летел — карточка уже не наша, сообщение об
-      // ошибке в чужой (или снова свёрнутый) блок совать незачем.
-      if (!box.classList.contains("hidden")) box.innerHTML = '<p class="muted">Не удалось загрузить подробности.</p>';
-      return;
-    }
-    // Пользователь мог успеть свернуть блок, пока летел запрос — не подсовываем
-    // содержимое в уже скрытый .movie-detail.
-    if (box.classList.contains("hidden")) return;
-  }
-  const roles = [];
-  if (mv.director) roles.push(`<p><b>Режиссёр:</b> ${esc(mv.director)}</p>`);
-  if (mv.actors && mv.actors.length) roles.push(`<p><b>В ролях:</b> ${esc(mv.actors.join(", "))}</p>`);
-  const desc = mv.description
-    ? `<p class="movie-desc${roles.length ? " has-sep" : ""}">${esc(mv.description)}</p>`
-    : "";
-  const content = roles.join("") + desc;
-  // Кнопка «Страница на Кинопоиске» — только когда реально есть что показать
-  // (спиннер загрузки и сообщение об ошибке сети выше по функции сюда не
-  // доходят, у них свои return). data-act, т.к. box.innerHTML — строка;
-  // обработчик вешаем ПОСЛЕ присвоения innerHTML, тем же паттерном data-act,
-  // что уже используется в файле.
-  box.innerHTML = content
-    ? content + '<div class="row"><button class="btn outlined" data-act="kpPage">Страница на Кинопоиске</button></div>'
-    : '<p class="muted">Подробностей нет.</p>';
-  if (content) box.querySelector('[data-act="kpPage"]').onclick = () => window.open(kinopoiskRuUrl(mv.kinopoiskId), "_blank", "noopener");
 }
 
 const CHEVRON_DOWN_ICON = '<svg class="icon chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
@@ -1421,11 +1349,27 @@ bindModal("movieInfoModalBackdrop", null, "movieInfoModalClose");
 // Escape или переходом на другой экран (hashchange). У каждого результата
 // — компактное меню «Добавить в…» (renderAddToMenu), комната заранее не
 // известна.
+// На узком экране (см. @media(max-width:30rem) в styles.css) поле+иконки
+// шапки в один ряд не помещаются даже ужатыми — там виден только сам
+// значок-лупа, а разворот на всю ширину шапки идёт через явный класс
+// (а не просто :focus-within, как на десктопе), потому что открыть нужно
+// ПО ТАПУ на саму лупу (значок не интерактивен без этого — inline input,
+// пока закрыт, display:none и фокус поймать не может), а не по фокусу поля,
+// которого ещё не видно.
+const isMobileSearch = () => matchMedia("(max-width:30rem)").matches;
+function openMobileSearch() {
+  $("globalSearchWrap").classList.add("header-search-open");
+  $("globalSearchInput").focus();
+}
 function closeGlobalSearch() {
   $("globalSearchResults").hidden = true;
+  $("globalSearchWrap").classList.remove("header-search-open");
 }
 
 let globalSearchDebounce = null;
+$("globalSearchWrap").addEventListener("click", () => {
+  if (isMobileSearch() && !$("globalSearchWrap").classList.contains("header-search-open")) openMobileSearch();
+});
 $("globalSearchInput").addEventListener("input", () => {
   $("globalSearchClearBtn").hidden = !$("globalSearchInput").value;
   clearTimeout(globalSearchDebounce);
@@ -1438,7 +1382,11 @@ $("globalSearchInput").addEventListener("keydown", e => {
   if (e.key === "Enter") { clearTimeout(globalSearchDebounce); runGlobalSearch(); }
   else if (e.key === "Escape") { e.target.blur(); closeGlobalSearch(); }
 });
-$("globalSearchClearBtn").onclick = () => {
+$("globalSearchClearBtn").onclick = e => {
+  // Клик всплывает до обработчика на #globalSearchWrap (открытие по тапу на
+  // мобильном, см. выше) — без stopPropagation закрытие тут же сменялось бы
+  // повторным открытием тем же кликом.
+  e.stopPropagation();
   $("globalSearchInput").value = "";
   $("globalSearchClearBtn").hidden = true;
   clearTimeout(globalSearchDebounce);
@@ -1634,8 +1582,8 @@ function renderDrawSetup() {
   updateMethodButtons();
 }
 
-/** Прячет и чистит панель с результатом (кнопки "Смотреть на Кинопоиске" и
-    т.п.) — вызывается и при смене метода, и в начале новой прокрутки, чтобы
+/** Прячет и чистит панель с результатом (кнопки "Смотреть" и т.п.) —
+    вызывается и при смене метода, и в начале новой прокрутки, чтобы
     под новым превью/новой прокруткой не оставались кнопки от ПРЕДЫДУЩЕГО
     результата (см. showDrawResult — сама панель, наоборот, никогда не
     скрывает #drawSetup, переключатель метода и «Выбрать случайный» теперь
@@ -1704,7 +1652,7 @@ const prefersReducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)"
 // с большим отрывом, чтобы заполнить даже широкий viewport на любом экране.
 // REEL_LAPS снижен с 5 до 3 — та же длительность прокрутки теперь тратится
 // на меньшую дистанцию, а значит каждый постер проводит в центральном слоте
-// заметно больше времени (см. DRAW_DURATION_DEFAULTS выше и «coverflow»-фокус
+// заметно больше времени (см. DRAW_DURATION_DEFAULT выше и «coverflow»-фокус
 // ниже — цель та же: дать эффекту укрупнения реально доиграть, а не мелькнуть).
 const REEL_LAPS = 3;
 const PREVIEW_LEAD_LAPS = 2;
@@ -2147,7 +2095,7 @@ function showDrawResult(candidates, resultId) {
       <h2>${esc(mv.title || "")}${esc(year)}</h2>
     </div>` : ""}
     <div class="row result-actions">
-      <button class="btn outlined" id="drawKpBtn">Смотреть на Кинопоиске</button>
+      <button class="btn outlined" id="drawKpBtn">Смотреть</button>
       <button class="btn filled" id="drawWatchedBtn">Отметить просмотренным</button>
     </div>`;
   $("drawKpBtn").onclick = () => window.open(kinopoiskCxUrl(resultId), "_blank", "noopener");

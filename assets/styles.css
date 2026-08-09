@@ -152,6 +152,31 @@ a{color:var(--md-sys-color-primary)}
 .header-search:focus-within{width:22rem;max-width:60vw;border-color:var(--md-sys-color-primary)}
 .header-search-icon{flex:none;color:var(--md-sys-color-on-surface-variant)}
 .header-search input[type="text"]{flex:1;min-width:0;border:none;background:none;padding:9px 0;font-size:14px}
+/* Узкий экран: лого+3 иконки-44px+растущее поле в один ряд не помещаются
+   никак — расширение "на месте" (как на десктопе) там просто некуда девать.
+   Вместо этого на мобильном виден только сам значок-лупа (компактная
+   круглая кнопка), а по тапу .header-search раскрывается в панель НА ВСЮ
+   ширину шапки поверх лого и остальных иконок (header-search-open, ставится
+   JS-ом — см. openMobileSearch/closeGlobalSearch в app.js), с полем и
+   кнопкой закрытия. .appbar-inner получает position:relative ТОЛЬКО тут —
+   якорь для этого абсолютного раскрытия, десктопную раскладку не трогает. */
+@media(max-width:30rem){
+  .appbar-inner{position:relative}
+  .header-search{
+    width:44px;height:44px;padding:0;justify-content:center;
+    border:none;background:none;
+  }
+  .header-search input[type="text"],
+  .header-search #globalSearchClearBtn{display:none}
+  .header-search.header-search-open{
+    position:absolute;inset:0 12px;width:auto;max-width:none;height:auto;z-index:25;
+    display:flex;justify-content:flex-start;gap:.4rem;padding:0 .7rem;
+    border:1px solid var(--md-sys-color-outline-variant);
+    background:var(--md-sys-color-surface-container-lowest);
+  }
+  .header-search.header-search-open input[type="text"]{display:block}
+  .header-search.header-search-open #globalSearchClearBtn{display:grid}
+}
 .header-search input[type="text"]:focus{border:none}
 .header-search-results{
   position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);
@@ -248,7 +273,7 @@ select{
 }
 [data-theme="dark"] select{color-scheme:dark}
 .row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:1rem}
-.bar{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-top:1rem}
+.bar{display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-top:1rem}
 
 /* ===================== ЭКРАН «НУЖЕН ВХОД» =====================
    Показывается только когда увести на auth не получилось (см.
@@ -314,6 +339,11 @@ select{
    и в результатах поиска (локальная и глобальная модалки), там размер
    мельче нарочно, плитки с результатами узкие. */
 .queue-grid .movie-poster, #movieHistoryList .movie-poster{width:8rem;height:12rem}
+/* Уже поменьше на телефоне — освобождает место рядом .movie-info под ряд
+   оценки (см. .star-rating выше по файлу), которому и так тесно. */
+@media(max-width:30rem){
+  .queue-grid .movie-poster, #movieHistoryList .movie-poster{width:6rem;height:9rem}
+}
 /* При такой высокой обложке короткий текстовый блок (название+чипы, у
    истории ещё и дата) занимает от силы половину высоты — раньше остальное
    просто пустовало. .movie-info растягивается на высоту постера уже по
@@ -363,7 +393,13 @@ select{
    чем .movie-grid (там только постер+название). minmax 25rem (было 20rem,
    см. план задачи «карточки очереди шире») — с запасом под карточки с
    длинным списком жанров, на экране ~1080px всё ещё 2-3 в ряд. */
-.queue-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(25rem,1fr));margin-top:10px}
+/* minmax(min(25rem,100%),1fr) — не просто minmax(25rem,1fr): на экранах уже
+   25rem (400px, любой телефон) чистый 25rem-минимум не давал колонке сжаться
+   вообще, и .movie-card внутри неё вылезала за viewport целиком (сама
+   карточка, а не что-то внутри неё — см. план задачи «мобильная вёрстка»).
+   min(25rem,100%) берёт меньшее из двух — на широких экранах работает как
+   раньше, на узких сжимается до 100% доступной ширины. */
+.queue-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(25rem,100%),1fr));margin-top:10px}
 /* Разворот «Подробнее» у карточки очереди — карточка тянется на всю ширину
    ряда чистым CSS Grid (класс ставит/снимает bindMovieDetailToggle в
    app.js), соседние карточки сами переставляются грид-раскладкой без
@@ -465,6 +501,15 @@ select{
    постоянно видимая, не только тултип. min-width гасит дрожание ряда при
    переходе между однозначными и «10». */
 .star-rating-score{margin-left:.35rem;min-width:1.1em}
+/* На узком экране 10 звёзд по 1.3em (~288px) не помещаются рядом с постером
+   8rem даже в карточке шириной в весь экран — колонка .movie-info под них
+   остаётся слишком узкой (см. план задачи «звёзды не влезают на телефоне»).
+   Тут не прячем и не переносим по одной в столбик (тогда ряд оценки стал бы
+   непропорционально высоким) — просто ужимаем сами звёзды. */
+@media(max-width:30rem){
+  .star-rating{gap:1px}
+  .star-rating .star-btn{width:1em;height:1em;font-size:1rem}
+}
 
 /* Свёрнутое состояние renderRatingToggle — компактная цифра вместо шкалы
    на 10 звёзд, когда оценка уже стоит (лента «Что мы смотрели», где шкала
@@ -585,6 +630,19 @@ select{
 /* «Смотреть»/«Страница на Кинопоиске» — рядом друг с другом, поровну делят
    ширину (flex:1 у каждой), а не одна крупная и одна с текстом впритык. */
 .movie-info-actions .btn{flex:1}
+/* На узком экране поровну делённой ширины «Страница на Кинопоиске» не
+   хватает даже на одну строку текста (у .btn white-space:nowrap+overflow:
+   hidden — обрезалась бы, не переносясь). Вместо переноса кнопок в столбик
+   (пробовали — не понравилось) «Смотреть» сжимается до одной иконки (тот
+   же треугольник, что и в компактных icon-btn на карточках очереди/
+   watched/списка) — подпись прячем, саму кнопку не убираем, чтобы клик по
+   ней остался ровно тем же. Освободившееся место целиком уходит соседней
+   кнопке (у неё flex:1 уже был, «Смотреть» просто перестаёт с ней делить
+   ширину поровну — flex:none). */
+@media(max-width:30rem){
+  .movie-info-actions #movieInfoWatchBtn{flex:none;width:44px;padding:0}
+  .movie-info-actions #movieInfoWatchBtn span{display:none}
+}
 
 /* Заголовок модалки убран из видимой шапки (дублирует название под
    постером) — h2 остаётся в DOM только ради aria-labelledby на .modal, сам
@@ -726,26 +784,49 @@ ul.plain li:last-child{border-bottom:0}
    градиент на бренд-цвете сервиса (--flame-base/--flame-tip, theme.css), а не
    просто заливка primary — тот же приём, что и .wheel-pointer/.reel-pointer
    ниже, чтобы кнопка визуально «подсвечивала» именно это действие. */
+/* Крупнее прежнего (56px→72px) и заметнее в покое: пульсирующее свечение
+   (draw-btn-idle-pulse) само привлекает взгляд к единственному реальному
+   действию на экране, не дожидаясь наведения — раньше кнопка была заметна
+   только цветом, в статике смотрелась ровно как любая другая .btn. Ряд с
+   ней явно центрирован (.draw-start-row ниже) — раньше центрирование
+   держалось только на margin:auto самой кнопки. */
+.draw-start-row{justify-content:center}
 .draw-start-btn{
-  display:block;margin:.6rem auto 0;height:56px;padding:0 2.6rem;border:0;
-  border-radius:var(--md-sys-shape-corner-full);font:inherit;font-size:16px;font-weight:700;
+  display:block;margin:.6rem auto 0;height:72px;padding:0 3.4rem;border:0;
+  border-radius:var(--md-sys-shape-corner-full);font:inherit;font-size:19px;font-weight:800;
   letter-spacing:.01em;color:#fff;cursor:pointer;position:relative;overflow:hidden;
   background:linear-gradient(135deg,var(--flame-base),var(--flame-tip));
-  box-shadow:0 4px 16px color-mix(in srgb, var(--flame-tip) 45%, transparent),var(--e1);
+  box-shadow:0 4px 16px color-mix(in srgb, var(--flame-tip) 55%, transparent),
+             0 0 0 3px color-mix(in srgb, var(--flame-tip) 25%, transparent),var(--e1);
   transition:transform .18s var(--ease-emph),box-shadow .18s;
+  animation:draw-btn-idle-pulse 2.6s ease-in-out infinite;
+}
+@keyframes draw-btn-idle-pulse{
+  0%,100%{box-shadow:0 4px 16px color-mix(in srgb, var(--flame-tip) 55%, transparent),
+                      0 0 0 3px color-mix(in srgb, var(--flame-tip) 25%, transparent),var(--e1)}
+  50%{box-shadow:0 4px 26px color-mix(in srgb, var(--flame-tip) 75%, transparent),
+                 0 0 0 7px color-mix(in srgb, var(--flame-tip) 12%, transparent),var(--e1)}
 }
 .draw-start-btn::after{content:"";position:absolute;inset:0;background:#fff;opacity:0;transition:opacity .2s}
-.draw-start-btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px color-mix(in srgb, var(--flame-tip) 55%, transparent),var(--e2)}
+.draw-start-btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px color-mix(in srgb, var(--flame-tip) 55%, transparent),var(--e2);animation-play-state:paused}
 .draw-start-btn:hover::after{opacity:.1}
-.draw-start-btn:active::after{opacity:.16}
-.draw-start-btn:disabled{opacity:.6;cursor:default;pointer-events:none;transform:none;box-shadow:var(--e1)}
+.draw-start-btn:active{transform:translateY(0) scale(.96)}
+.draw-start-btn:active::after{opacity:.2}
+.draw-start-btn:disabled{opacity:.6;cursor:default;pointer-events:none;transform:none;box-shadow:var(--e1);animation:none}
+/* Общий свитч prefers-reduced-motion внизу файла (animation-duration:.01ms
+   !important на *) сам гасит пульс, отдельная медиа-запись тут не нужна —
+   тот же принцип, что у .detail-spinner/.icon-btn .chevron выше. */
 
 /* Панель настроек длительности прокрутки — тот же самый .menu-wrap/.menu
    дропдаун, что и у #roomMenu/#csvMenu (не отдельная модалка, см. план
    задачи 3), просто с формой внутри вместо .menu-item-кнопок. */
 .draw-method-row{display:flex;align-items:center;gap:.5rem}
+/* Без этого шестерёнка съезжала вниз — базовый margin-top:1.1rem у
+   .menu-wrap рассчитан на другие места (заголовок/строка карточки), тут
+   сосед по ряду — .mini-seg с align-items:center, лишний отступ сверху
+   визуально «ронял» иконку ниже кнопок метода. */
+.draw-method-row .menu-wrap{margin-top:0}
 .draw-settings-panel{width:15.5rem;display:flex;flex-direction:column;gap:.8rem;padding:.9rem}
-.draw-settings-row{display:flex;gap:.6rem}
 .draw-settings-field{
   display:flex;flex-direction:column;gap:.35rem;flex:1;
   font-size:12px;font-weight:600;color:var(--md-sys-color-on-surface-variant);
