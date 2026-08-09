@@ -206,6 +206,7 @@ addEventListener("hashchange", () => { closeGlobalSearch(); route().catch(consol
 async function showRooms() {
   showOnly("roomsView");
   state.room = null;
+  roomsPage = 0;
   document.title = "Что смотрим? — мои комнаты";
   // Поиск на главной сбрасывается при каждом заходе на страницу — иначе
   // после ухода на другой экран и возврата сюда осталась бы висеть чужая
@@ -464,11 +465,25 @@ function bindMovieCardInfoOpen(card, mv) {
   });
 }
 
+// Пагинация комнат — целиком на фронте (список и так уже загружен целиком
+// через GET /api/rooms, свой лимит/оффсет на бэке заводить незачем: для
+// личного проекта такого масштаба десятки комнат — уже много). page
+// сбрасывается в showRooms() при каждом заходе на экран (см. там), чтобы
+// после создания/выхода из комнаты не залипать на несуществующей странице.
+const ROOMS_PAGE_SIZE = 5;
+let roomsPage = 0;
+
 function renderRooms() {
   const box = $("roomList");
   box.textContent = "";
   $("roomsEmpty").hidden = state.rooms.length > 0;
-  for (const r of state.rooms) {
+
+  const pages = Math.max(1, Math.ceil(state.rooms.length / ROOMS_PAGE_SIZE));
+  roomsPage = Math.min(roomsPage, pages - 1);
+  const start = roomsPage * ROOMS_PAGE_SIZE;
+  const pageRooms = state.rooms.slice(start, start + ROOMS_PAGE_SIZE);
+
+  for (const r of pageRooms) {
     const card = el("button", "card");
     card.innerHTML = `
       <div class="title">${esc(r.title)}</div>
@@ -476,7 +491,17 @@ function renderRooms() {
     card.onclick = () => { location.hash = "#/room/" + r.id; };
     box.append(card);
   }
+
+  const showPager = state.rooms.length > ROOMS_PAGE_SIZE;
+  $("roomsPager").hidden = !showPager;
+  if (showPager) {
+    $("roomsPagerLabel").textContent = `Стр. ${roomsPage + 1} из ${pages}`;
+    $("roomsPrevBtn").disabled = roomsPage <= 0;
+    $("roomsNextBtn").disabled = roomsPage >= pages - 1;
+  }
 }
+$("roomsPrevBtn").onclick = () => { roomsPage = Math.max(0, roomsPage - 1); renderRooms(); };
+$("roomsNextBtn").onclick = () => { roomsPage += 1; renderRooms(); };
 
 function plural(n, one, few, many) {
   const a = Math.abs(n) % 100, b = a % 10;
@@ -1472,51 +1497,39 @@ $("deleteRoomBtn").onclick = async () => {
 
 // ───────────────────────── розыгрыш: настройки скорости ─────────────────────────
 // Три отдельных значения в localStorage — тот же паттерн, что и
-// "movies.theme"/ROUTE_KEY выше: drawDurationMin/drawDurationMax задают
-// диапазон панели настроек (#drawSettingsPanel), drawDuration — саму
-// длительность прокрутки в секундах. currentDrawDuration() читается ЗАНОВО в
-// момент запуска каждой анимации (renderReel/spinWheelTo), а не кэшируется
-// один раз при загрузке страницы — иначе смена настройки между прогонами не
-// подхватывалась бы следующим «Крутить ещё раз».
-const DRAW_DURATION_MIN_KEY = "movies.drawDurationMin";
-const DRAW_DURATION_MAX_KEY = "movies.drawDurationMax";
+// "movies.theme"/ROUTE_KEY выше. Раньше диапазон (мин/макс) тоже был
+// настраиваемым, попросили убрать — усложняло панель ради того, что почти
+// никто не трогал, границы теперь просто фиксированные константы
+// (DRAW_DURATION_BOUNDS), персистится только сама длительность.
+// currentDrawDuration() читается ЗАНОВО в момент запуска каждой анимации
+// (renderReel/spinWheelTo), а не кэшируется один раз при загрузке страницы —
+// иначе смена настройки между прогонами не подхватывалась бы следующим
+// «Крутить ещё раз».
 const DRAW_DURATION_KEY = "movies.drawDuration";
-// value поднят с 3.2 до 6 — на старой скорости кандидаты пролетали мимо
+// DEFAULT поднят с 3.2 до 6 — на старой скорости кандидаты пролетали мимо
 // центра быстрее, чем успевал доиграть transform-переход укрупнения
 // (.reel-item-focused, см. REEL_FOCUS_SCALE) — эффект просто не успевал
 // стать заметным глазу. См. также REEL_LAPS ниже (меньше кругов — меньше
 // суммарная дистанция на ту же длительность, то же самое соображение).
-const DRAW_DURATION_DEFAULTS = { min: 1, max: 10, value: 6 };
+const DRAW_DURATION_BOUNDS = { min: 1, max: 10 };
+const DRAW_DURATION_DEFAULT = 6;
 
-function loadDrawDurationSettings() {
-  const min = parseFloat(localStorage.getItem(DRAW_DURATION_MIN_KEY));
-  const max = parseFloat(localStorage.getItem(DRAW_DURATION_MAX_KEY));
-  const value = parseFloat(localStorage.getItem(DRAW_DURATION_KEY));
-  return {
-    min: Number.isFinite(min) ? min : DRAW_DURATION_DEFAULTS.min,
-    max: Number.isFinite(max) ? max : DRAW_DURATION_DEFAULTS.max,
-    value: Number.isFinite(value) ? value : DRAW_DURATION_DEFAULTS.value,
-  };
+function clampDrawDuration(value) {
+  const v = Number.isFinite(value) ? value : DRAW_DURATION_DEFAULT;
+  return Math.min(DRAW_DURATION_BOUNDS.max, Math.max(DRAW_DURATION_BOUNDS.min, v));
 }
-
-/** Валидирует и сохраняет разом все три величины (min≥0.5, max≥min+0.5,
-    value зажато в [min,max]) — вызывается при любом изменении любого поля
-    панели настроек (см. привязку инпутов ниже), возвращает уже
-    отвалидированные значения для синхронизации UI. */
-function saveDrawDurationSettings(next) {
-  const min = Math.max(0.5, Number.isFinite(next.min) ? next.min : DRAW_DURATION_DEFAULTS.min);
-  const max = Math.max(min + 0.5, Number.isFinite(next.max) ? next.max : DRAW_DURATION_DEFAULTS.max);
-  const rawValue = Number.isFinite(next.value) ? next.value : DRAW_DURATION_DEFAULTS.value;
-  const value = Math.min(max, Math.max(min, rawValue));
-  localStorage.setItem(DRAW_DURATION_MIN_KEY, String(min));
-  localStorage.setItem(DRAW_DURATION_MAX_KEY, String(max));
-  localStorage.setItem(DRAW_DURATION_KEY, String(value));
-  return { min, max, value };
+function loadDrawDuration() {
+  return clampDrawDuration(parseFloat(localStorage.getItem(DRAW_DURATION_KEY)));
+}
+function saveDrawDuration(value) {
+  const v = Math.round(clampDrawDuration(value) * 10) / 10;
+  localStorage.setItem(DRAW_DURATION_KEY, String(v));
+  return v;
 }
 
 /** Текущая длительность прокрутки в секундах — то, что реально читают
     renderReel/spinWheelTo перед стартом КАЖДОЙ анимации. */
-function currentDrawDuration() { return loadDrawDurationSettings().value; }
+function currentDrawDuration() { return loadDrawDuration(); }
 
 function closeDrawSettingsPanel() {
   const panel = $("drawSettingsPanel");
@@ -1525,14 +1538,12 @@ function closeDrawSettingsPanel() {
   $("drawSettingsBtn").setAttribute("aria-expanded", "false");
 }
 function syncDrawSettingsInputs() {
-  const { min, max, value } = loadDrawDurationSettings();
-  $("drawDurationMinInput").value = min;
-  $("drawDurationMaxInput").value = max;
-  $("drawDurationRange").min = min;
-  $("drawDurationRange").max = max;
+  const value = loadDrawDuration();
+  $("drawDurationRange").min = DRAW_DURATION_BOUNDS.min;
+  $("drawDurationRange").max = DRAW_DURATION_BOUNDS.max;
   $("drawDurationRange").value = value;
-  $("drawDurationInput").min = min;
-  $("drawDurationInput").max = max;
+  $("drawDurationInput").min = DRAW_DURATION_BOUNDS.min;
+  $("drawDurationInput").max = DRAW_DURATION_BOUNDS.max;
   $("drawDurationInput").value = value;
 }
 $("drawSettingsBtn").onclick = e => {
@@ -1548,13 +1559,15 @@ document.addEventListener("click", e => {
   if (!panel || panel.hidden) return;
   if (!panel.contains(e.target) && e.target !== $("drawSettingsBtn") && !$("drawSettingsBtn").contains(e.target)) closeDrawSettingsPanel();
 });
-// min/max — границы диапазона, применяются по "change" (блюр/enter), чтобы
-// не обрезать многозначное число посреди набора; сама длительность (range +
-// её number-двойник) — по "input", вживую, друг друга синхронизируют.
-$("drawDurationMinInput").onchange = () => { saveDrawDurationSettings({ ...loadDrawDurationSettings(), min: parseFloat($("drawDurationMinInput").value) }); syncDrawSettingsInputs(); };
-$("drawDurationMaxInput").onchange = () => { saveDrawDurationSettings({ ...loadDrawDurationSettings(), max: parseFloat($("drawDurationMaxInput").value) }); syncDrawSettingsInputs(); };
-$("drawDurationRange").oninput = () => { saveDrawDurationSettings({ ...loadDrawDurationSettings(), value: parseFloat($("drawDurationRange").value) }); syncDrawSettingsInputs(); };
-$("drawDurationInput").oninput = () => { saveDrawDurationSettings({ ...loadDrawDurationSettings(), value: parseFloat($("drawDurationInput").value) }); syncDrawSettingsInputs(); };
+$("drawDurationRange").oninput = () => { saveDrawDuration(parseFloat($("drawDurationRange").value)); syncDrawSettingsInputs(); };
+$("drawDurationInput").oninput = () => { saveDrawDuration(parseFloat($("drawDurationInput").value)); syncDrawSettingsInputs(); };
+// Случайная длительность — равномерно в тех же фиксированных границах,
+// округлена до .1с (тот же шаг, что у слайдера/поля).
+$("drawRandomDurationBtn").onclick = () => {
+  const rand = DRAW_DURATION_BOUNDS.min + Math.random() * (DRAW_DURATION_BOUNDS.max - DRAW_DURATION_BOUNDS.min);
+  saveDrawDuration(rand);
+  syncDrawSettingsInputs();
+};
 
 // ───────────────────────── розыгрыш (#/room/:id/draw) ─────────────────────────
 // Сервер решает результат ОДНИМ вызовом POST /draw и присылает и candidates,
