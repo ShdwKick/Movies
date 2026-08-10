@@ -846,6 +846,15 @@ ul.plain li:last-child{border-bottom:0}
    drawStartBtn.onclick в app.js) — тот же приём, что и .mini-seg.disabled
    выше, просто через нативный :disabled, а не отдельный класс. */
 #drawSettingsBtn:disabled{opacity:.5;cursor:default;pointer-events:none}
+/* Масштаб — только для ПК: на телефоне колесо/карусель и так упираются в
+   ширину экрана (см. min(...,92vw)/min(...,94vw) у .wheel-wrap/.reel-viewport),
+   увеличивать там особо некуда, а лишний контрол в и без того тесной панели
+   настроек только мешает. applyDrawScale в app.js на этой же ширине
+   принудительно откатывает --draw-scale к 1, даже если на ПК до этого
+   сохранили другое значение. */
+@media(max-width:30rem){
+  .draw-scale-field{display:none}
+}
 
 /* Горизонтальная карусель постеров-кандидатов («Случайный выбор») — .reel-track
    едет translateX и замедляется к финалу, останавливаясь ровно под

@@ -1501,8 +1501,15 @@ function saveDrawScale(value) {
   localStorage.setItem(DRAW_SCALE_KEY, String(v));
   return v;
 }
+// Масштаб — фича только для ПК (см. .draw-scale-field в styles.css, тот же
+// брейкпоинт, что и у isMobileSearch выше): на телефоне и без того всё
+// упирается в ширину экрана, а поле в панели настроек только мешает. Здесь
+// откатываем к 1 принудительно, а не полагаемся на то, что пользователь не
+// успеет сохранить другое значение с ПК, — иначе телефон унаследовал бы
+// «десктопный» --draw-scale через тот же localStorage.
 function applyDrawScale() {
-  $("drawStage").style.setProperty("--draw-scale", String(loadDrawScale()));
+  const scale = matchMedia("(max-width:30rem)").matches ? DRAW_SCALE_DEFAULT : loadDrawScale();
+  $("drawStage").style.setProperty("--draw-scale", String(scale));
 }
 
 function closeDrawSettingsPanel() {
