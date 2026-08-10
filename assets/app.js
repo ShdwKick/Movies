@@ -1479,6 +1479,32 @@ function saveDrawDuration(value) {
     renderReel/spinWheelTo перед стартом КАЖДОЙ анимации. */
 function currentDrawDuration() { return loadDrawDuration(); }
 
+// Масштаб колеса/карусели — в отличие от длительности, читается не в
+// момент запуска анимации, а применяется напрямую к DOM как CSS-переменная
+// --draw-scale на #drawStage (см. applyDrawScale ниже): и renderWheelSvg,
+// и renderReel рисуют СВОИХ детей внутрь этого контейнера, а stage.innerHTML
+// каждый раз перетирается заново (см. drawStartBtn.onclick), но сам атрибут
+// style у #drawStage при этом не трогается — значит достаточно выставить
+// переменную один раз при открытии экрана розыгрыша.
+const DRAW_SCALE_KEY = "movies.drawScale";
+const DRAW_SCALE_BOUNDS = { min: 0.6, max: 1.6 };
+const DRAW_SCALE_DEFAULT = 1;
+function clampDrawScale(value) {
+  const v = Number.isFinite(value) ? value : DRAW_SCALE_DEFAULT;
+  return Math.min(DRAW_SCALE_BOUNDS.max, Math.max(DRAW_SCALE_BOUNDS.min, v));
+}
+function loadDrawScale() {
+  return clampDrawScale(parseFloat(localStorage.getItem(DRAW_SCALE_KEY)));
+}
+function saveDrawScale(value) {
+  const v = Math.round(clampDrawScale(value) * 100) / 100;
+  localStorage.setItem(DRAW_SCALE_KEY, String(v));
+  return v;
+}
+function applyDrawScale() {
+  $("drawStage").style.setProperty("--draw-scale", String(loadDrawScale()));
+}
+
 function closeDrawSettingsPanel() {
   const panel = $("drawSettingsPanel");
   if (!panel || panel.hidden) return;
@@ -1493,6 +1519,14 @@ function syncDrawSettingsInputs() {
   $("drawDurationInput").min = DRAW_DURATION_BOUNDS.min;
   $("drawDurationInput").max = DRAW_DURATION_BOUNDS.max;
   $("drawDurationInput").value = value;
+
+  const scale = loadDrawScale();
+  $("drawScaleRange").min = DRAW_SCALE_BOUNDS.min;
+  $("drawScaleRange").max = DRAW_SCALE_BOUNDS.max;
+  $("drawScaleRange").value = scale;
+  $("drawScaleInput").min = DRAW_SCALE_BOUNDS.min;
+  $("drawScaleInput").max = DRAW_SCALE_BOUNDS.max;
+  $("drawScaleInput").value = scale;
 }
 $("drawSettingsBtn").onclick = e => {
   e.stopPropagation();
@@ -1516,6 +1550,8 @@ $("drawRandomDurationBtn").onclick = () => {
   saveDrawDuration(rand);
   syncDrawSettingsInputs();
 };
+$("drawScaleRange").oninput = () => { saveDrawScale(parseFloat($("drawScaleRange").value)); syncDrawSettingsInputs(); applyDrawScale(); };
+$("drawScaleInput").oninput = () => { saveDrawScale(parseFloat($("drawScaleInput").value)); syncDrawSettingsInputs(); applyDrawScale(); };
 
 // ───────────────────────── розыгрыш (#/room/:id/draw) ─────────────────────────
 // Сервер решает результат ОДНИМ вызовом POST /draw и присылает и candidates,
@@ -1574,6 +1610,7 @@ function renderDrawSetup() {
   $("drawSetup").classList.remove("hidden");
   const stage = $("drawStage");
   stage.classList.remove("hidden");
+  applyDrawScale();
   hideDrawResult();
   const btn = $("drawStartBtn");
   btn.disabled = false;
@@ -1954,9 +1991,13 @@ function renderWheelSvg(container, candidates) {
       const anchor = flip ? "end" : "start";
       // Лимит символов — грубо пропорционален углу сектора: у широких
       // секторов (мало кандидатов) название почти целиком, у узких —
-      // короче, чтобы не наезжать на соседей. Очень много кандидатов сразу —
-      // ожидаемый компромисс по читаемости (см. план), но не по вёрстке.
-      const maxChars = Math.max(6, Math.min(16, Math.round(sweep / 6)));
+      // короче, чтобы не наезжать на соседей. Текст идёт прямой линией от
+      // ступицы к краю (не по дуге), поэтому реальный запас по длине почти
+      // не зависит от ширины сектора — ограничивать его так жёстко, как
+      // раньше, не было нужды; тесно может стать только у самой ступицы при
+      // очень большом числе кандидатов, отсюда и остаётся мягкая привязка
+      // к sweep, но с гораздо более щедрыми потолком/полом.
+      const maxChars = Math.max(12, Math.min(30, Math.round(sweep / 2.2)));
       const title = c.title || "";
       const label = title.length > maxChars ? `${title.slice(0, maxChars - 1).trimEnd()}…` : title;
       const full = `${title}${c.year ? ` (${c.year})` : ""}`;

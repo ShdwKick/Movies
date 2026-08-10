@@ -860,16 +860,23 @@ ul.plain li:last-child{border-bottom:0}
    остаться (иначе видно соседей за краем ленты по горизонтали) — единственный
    надёжный способ не обрезать увеличенный постер сверху/снизу это just
    заложить запас в padding заранее, см. план задачи 6. */
-.reel-viewport{position:relative;overflow:hidden;width:min(40rem,94vw);margin:1.4rem auto 0;padding:7rem 0}
+/* --draw-scale — настраиваемый пользователем масштаб (см. applyDrawScale в
+   app.js), выставляется как CSS-переменная на #drawStage ОДИН раз при
+   открытии экрана розыгрыша и переживает любые перерисовки stage.innerHTML,
+   потому что сидит на самом контейнере, а не на его детях. padding здесь
+   масштабируется вместе с постером — иначе увеличенный фокусный кадр
+   (.reel-item-focused, scale(1.5) от уже отмасштабированного размера) не
+   помещается в фиксированный запас сверху/снизу. */
+.reel-viewport{position:relative;overflow:hidden;width:min(calc(40rem * var(--draw-scale,1)),94vw);margin:1.4rem auto 0;padding:calc(7rem * var(--draw-scale,1)) 0}
 .reel-track{display:flex;align-items:flex-start;will-change:transform;transition:transform 3.2s cubic-bezier(.16,1,.3,1)}
 /* .15s (не .2s) — при новой скорости прокрутки (см. DRAW_DURATION_DEFAULTS/
    REEL_LAPS в app.js) постер проводит в центральном слоте примерно .2с;
    более короткий переход укладывается в это окно с запасом и укрупнение
    успевает реально доиграть, а не оборваться на середине. */
-.reel-item{flex:none;width:11rem;padding:0 .5rem;text-align:center;transform-origin:center;transform:scale(1);transition:transform .15s var(--ease-std)}
-.reel-item .movie-poster{width:10rem;height:15rem;margin:0 auto}
+.reel-item{flex:none;width:calc(11rem * var(--draw-scale,1));padding:0 .5rem;text-align:center;transform-origin:center;transform:scale(1);transition:transform .15s var(--ease-std)}
+.reel-item .movie-poster{width:calc(10rem * var(--draw-scale,1));height:calc(15rem * var(--draw-scale,1));margin:0 auto}
 .reel-item .title{
-  margin-top:.4rem;font-weight:600;font-size:.82rem;overflow:hidden;
+  margin-top:.4rem;font-weight:600;font-size:calc(.82rem * var(--draw-scale,1));overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;
 }
 /* Увеличение того элемента, что сейчас ровно на линии .reel-pointer —
@@ -890,7 +897,9 @@ ul.plain li:last-child{border-bottom:0}
 .reel-pointer::before{top:-.15rem;border-top:.7rem solid var(--flame-tip)}
 .reel-pointer::after{bottom:-.15rem;border-bottom:.7rem solid var(--flame-tip)}
 
-.wheel-wrap{position:relative;width:28rem;max-width:92vw;aspect-ratio:1;margin:1.4rem auto}
+/* SVG внутри масштабируется вместе с контейнером через viewBox само по
+   себе (включая текст секторов) — отдельно трогать .sector-label не нужно. */
+.wheel-wrap{position:relative;width:calc(28rem * var(--draw-scale,1));max-width:92vw;aspect-ratio:1;margin:1.4rem auto}
 .wheel-wrap svg{width:100%;height:100%;display:block;transition:transform 4.2s cubic-bezier(.16,1,.3,1)}
 /* Гашение сектора выбывшего кандидата в раунде «На выбывание» — плавно, а не
    рывком, см. animateElimination в app.js. */
