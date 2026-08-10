@@ -323,12 +323,6 @@ select{
   box-shadow:var(--e1);transition:box-shadow .18s,border-color .18s;
 }
 .movie-card:hover{box-shadow:var(--e2)}
-/* Карточки очереди/истории/watched/личного списка целиком кликабельны —
-   клик открывает модалку «Фильм» (bindMovieCardInfoOpen в app.js), курсор
-   должен читаться как «тут можно нажать» так же, как у .movie-tile/
-   .movie-card-pick (плитка витрины и результат локального поиска). */
-.movie-card-clickable{cursor:pointer}
-.movie-card-clickable:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
 .movie-card::before{
   content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
   background:linear-gradient(to top,var(--flame-base),var(--flame-tip));opacity:.7;
@@ -342,37 +336,6 @@ select{
 .movie-info{flex:1;min-width:0}
 .movie-info .title{font-weight:650;font-size:15px}
 .chip-row{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.4rem}
-
-/* Обложка покрупнее — только в очереди комнаты и в истории просмотров (там
-   попросили явно), НЕ меняет базовый .movie-poster везде — он тот же класс
-   и в результатах поиска (локальная и глобальная модалки), там размер
-   мельче нарочно, плитки с результатами узкие. */
-.queue-grid .movie-poster, #movieHistoryList .movie-poster{width:8rem;height:12rem}
-/* Уже поменьше на телефоне — освобождает место рядом .movie-info под ряд
-   оценки (см. .star-rating выше по файлу), которому и так тесно. */
-@media(max-width:30rem){
-  .queue-grid .movie-poster, #movieHistoryList .movie-poster{width:6rem;height:9rem}
-}
-/* При такой высокой обложке короткий текстовый блок (название+чипы, у
-   истории ещё и дата) занимает от силы половину высоты — раньше остальное
-   просто пустовало. .movie-info растягивается на высоту постера уже по
-   умолчанию (align-items:stretch у .movie-card-head), тут только заставляем
-   ЕЁ СОДЕРЖИМОЕ разъехаться по этой высоте: текстовый блок вверху
-   (.movie-info-top — общая обёртка для title+chip-row(+дата в истории)),
-   а «Смотреть»/оценка — вниз, а не отдельным рядом ПОД всей шапкой
-   карточки. Тот же приём для обеих карточек, оба узнают друг друга по
-   контейнеру-предку — своего модификатора на .movie-info не заводим, чтобы
-   не плодить классы под одно и то же поведение. */
-.queue-grid .movie-info, #movieHistoryList .movie-info{display:flex;flex-direction:column;justify-content:space-between}
-/* Раньше .movie-card-footer шёл отдельным рядом ПОД всей шапкой карточки
-   (margin-top:.8rem — отступ от .movie-detail над ним), туда и был расчёт
-   зазора. Теперь он внутри .movie-info, зазор уже даёт justify-content —
-   свой margin-top тут лишний, задвоил бы отступ. */
-.queue-grid .movie-info .movie-card-footer{margin-top:0}
-/* Аналогично — .score-row раньше был отдельным рядом ПОД всей шапкой
-   карточки истории (margin-top:.7rem), теперь внутри .movie-info, зазор
-   уже даёт justify-content. */
-#movieHistoryList .score-row{margin-top:0}
 
 /* Карточка результата поиска в модалке «Добавить фильм» — кликабельна
    целиком (клик добавляет фильм в комнату, см. renderMovieResultCard в
@@ -397,107 +360,11 @@ select{
 .movie-card-head-actions{display:flex;align-items:flex-start;gap:.3rem;flex:none}
 .movie-card-head-actions .menu-wrap{margin-top:0}
 
-/* Очередь комнаты — сетка, а не вертикальная лента: карточка стала у́же
-   (постер+чипы+кнопки в углах, а не на всю ширину колонки), плитки уже,
-   чем .movie-grid (там только постер+название). minmax 25rem (было 20rem,
-   см. план задачи «карточки очереди шире») — с запасом под карточки с
-   длинным списком жанров, на экране ~1080px всё ещё 2-3 в ряд. */
-/* minmax(min(25rem,100%),1fr) — не просто minmax(25rem,1fr): на экранах уже
-   25rem (400px, любой телефон) чистый 25rem-минимум не давал колонке сжаться
-   вообще, и .movie-card внутри неё вылезала за viewport целиком (сама
-   карточка, а не что-то внутри неё — см. план задачи «мобильная вёрстка»).
-   min(25rem,100%) берёт меньшее из двух — на широких экранах работает как
-   раньше, на узких сжимается до 100% доступной ширины. */
-.queue-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(25rem,100%),1fr));margin-top:10px}
-/* Разворот «Подробнее» у карточки очереди — карточка тянется на всю ширину
-   ряда чистым CSS Grid (класс ставит/снимает bindMovieDetailToggle в
-   app.js), соседние карточки сами переставляются грид-раскладкой без
-   ручного JS-пересчёта позиций. */
-.queue-grid .movie-card.expanded{grid-column:1/-1}
-
-/* Углы карточки очереди — стрелка «Подробнее» и «…»-меню действий уехали в
-   правый верхний угол через тот же .title-row/.title-actions, что и
-   заголовок комнаты/«Фильмы» (а не absolute-позиционирование с нуля):
-   .movie-card-head должен тянуться и уступать место actions, а margin-top
-   у .title-actions/.menu-wrap, рассчитанный на отступ под <h1>, тут не нужен. */
-.movie-card .title-row{gap:.4rem}
-.movie-card .title-row .movie-card-head{flex:1;min-width:0}
-.movie-card .title-actions{margin-top:0}
-
-/* Кнопка «Смотреть» (kinopoiskCxUrl) — правый нижний угол карточки очереди,
-   на месте бывших «Отметить просмотренным»/«Убрать из комнаты» (те переехали
-   в меню-«…» выше). */
-.movie-card-footer{display:flex;justify-content:flex-end;margin-top:.8rem}
-
 .movie-detail{margin-top:.6rem;font-size:.9rem}
 .movie-detail p{margin:.3rem 0}
 .movie-detail .movie-desc{color:var(--md-sys-color-on-surface-variant)}
 .movie-detail .movie-desc.has-sep{margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--md-sys-color-outline-variant)}
 
-/* Индикатор загрузки подробностей (renderMovieDetail в app.js) — результаты
-   /api/search не содержат director/actors/description, при первом раскрытии
-   карточки они догружаются отдельным запросом; спиннер держит место, пока он
-   летит. Общий свитч prefers-reduced-motion внизу файла (animation-duration:
-   .01ms !important на *) сам гасит вращение — отдельной медиа-записи тут
-   не нужно, как и у .icon-btn .chevron выше. */
-.detail-spinner{
-  width:1.4rem;height:1.4rem;margin:.4rem auto;
-  border:2px solid var(--md-sys-color-outline-variant);
-  border-top-color:var(--md-sys-color-primary);
-  border-radius:50%;
-  animation:spin .8s linear infinite;
-}
-@keyframes spin{to{transform:rotate(360deg)}}
-
-/* Карточка ИСТОРИИ (renderHistoryCard в app.js) — двухколоночная: слева вся
-   обычная инфа (постер/название/чипы/оценки), справа — описание. Раньше
-   описание просто лежало под остальным содержимым и оставляло пустое место
-   справа от короткой левой части; теперь это место занято текстом (см. план
-   задачи «история: описание в колонке»). Колонки через flex, а не grid —
-   .history-desc не всегда есть (у фильма может не быть description), а с
-   flex отсутствующий элемент просто не занимает место, без пустой колонки. */
-.history-body{display:flex;gap:1.2rem;align-items:flex-start}
-.history-main{flex:1 1 55%;min-width:0}
-.history-desc{flex:1 1 45%;min-width:0}
-/* Меню «…» — третий flex-элемент, справа от колонки с описанием (а не в
-   середине карточки на стыке колонок, как было раньше) — пользователь явно
-   попросил именно так. .menu-wrap по умолчанию несёт margin-top:1.1rem,
-   рассчитанный на контекст .title-row — тут сбрасываем, чтобы иконка встала
-   вровень с верхним краем постера/описания. */
-.history-menu{flex:none}
-.history-menu .menu-wrap{margin-top:0}
-/* -webkit-line-clamp — стандартный кросс-браузерный приём многострочного
-   обрезания текста (Chrome/Edge/большинство браузеров), без него текст
-   просто был бы длиннее по высоте, чем левая колонка. Строк больше, чем в
-   вертикальной раскладке (было 3) — колонка теперь высокая, а не узкая
-   полоса под карточкой. */
-.movie-desc-preview{
-  font-size:.9rem;color:var(--md-sys-color-on-surface-variant);
-  display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;
-  overflow:hidden;text-overflow:ellipsis;
-}
-/* Уже узкий экран — колонки не помещаются рядом читаемо, возвращаемся к
-   вертикальной раскладке (описание снова снизу, обрезание короче). */
-@media(max-width:36rem){
-  .history-body{flex-direction:column;gap:.6rem}
-  .history-desc .movie-desc-preview{-webkit-line-clamp:3}
-  /* В колонку меню вставать в конец потока не должно — уводим его в угол
-     карточки abs-позиционированием (.movie-card уже position:relative).
-     padding-right у .history-main — чтобы длинное название не заезжало под
-     иконку. */
-  .history-menu{position:absolute;top:14px;right:14px}
-  .history-main{padding-right:2rem}
-}
-
-/* «Подробнее» — компактная icon-btn со стрелкой вниз вместо текстовой кнопки
-   (см. bindMovieDetailToggle в app.js): стрелка переворачивается на 180° при
-   разворачивании блока. Общий свитч prefers-reduced-motion выше в файле
-   (transition-duration:.01ms !important) сам гасит анимацию, отдельная
-   медиа-запись тут не нужна. */
-.icon-btn .chevron{transition:transform .2s var(--ease-std)}
-.icon-btn.expanded .chevron{transform:rotate(180deg)}
-
-.score-row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:.7rem}
 .star-rating{display:inline-flex;align-items:center;gap:2px}
 .star-rating .star-btn{
   padding:0;border-radius:var(--md-sys-shape-corner-xs);background:transparent;border:0;cursor:pointer;
@@ -519,16 +386,6 @@ select{
   .star-rating{gap:1px}
   .star-rating .star-btn{width:1em;height:1em;font-size:1rem}
 }
-
-/* Свёрнутое состояние renderRatingToggle — компактная цифра вместо шкалы
-   на 10 звёзд, когда оценка уже стоит (лента «Что мы смотрели», где шкала
-   на каждой из многих карточек была бы избыточной). */
-.rating-chip{
-  display:inline-flex;align-items:center;gap:.3em;
-  background:transparent;border:0;padding:.2em .5em;border-radius:var(--md-sys-shape-corner-s);
-  color:var(--flame-tip);font:inherit;font-weight:650;cursor:pointer;
-}
-.rating-chip:hover{background:var(--md-sys-color-surface-container)}
 
 /* ===================== ВИТРИНА «ИЗ БАЗЫ» (главная) =====================
    Тот же паттерн сетки, что .trip-grid в Trip/assets/styles.css — карточки
@@ -608,6 +465,21 @@ select{
   .movie-tile:focus-within .movie-tile-poster-wrap .menu-wrap{opacity:1}
 }
 
+/* Кружок личной оценки (renderRatingBadge) — нижним правым углом поверх
+   обложки, тем же приёмом absolute-позиционирования, что и меню «…» в
+   верхнем углу выше. В отличие от меню — виден ВСЕГДА, не только по
+   наведению: это не действие, а факт («уже оценено на X»), прятать его не
+   нужно. renderMovieTile вызывает renderRatingBadge, только когда оценка
+   реально есть — самого элемента в DOM просто нет, пока оценивать нечего. */
+.rating-badge{
+  position:absolute;bottom:.4rem;right:.4rem;z-index:1;
+  width:1.7rem;height:1.7rem;border-radius:50%;
+  display:grid;place-items:center;font-size:.74rem;font-weight:700;line-height:1;
+  border:0;background:var(--flame-tip);color:#fff;cursor:pointer;
+  box-shadow:0 1px 4px rgba(0,0,0,.4);transition:transform .15s var(--ease-std);
+}
+.rating-badge:hover{transform:scale(1.08)}
+
 /* Строка название/год + «Смотреть» — в один ряд (задача «Смотреть» на
    уровне заголовка, а не отдельным рядом внизу): текст слева и может занимать
    несколько строк, кнопка справа не сжимается (flex:none у .icon-btn). */
@@ -635,6 +507,11 @@ select{
 .movie-info-caption{display:flex;justify-content:space-between;align-items:flex-start;gap:.8rem;margin-top:.8rem}
 .movie-info-caption .title{font-weight:650;font-size:16px}
 .movie-info-caption .chip-row{justify-content:flex-end;margin-top:0}
+/* «Ваша оценка» в модалке «Фильм» — обычная шкала из 10 звёзд
+   (renderStarRating), та же самая, что и в маленьком окошке «Оценка»
+   (renderRatingBadge/openRateModal) для компактной карточки — тут просто
+   встроена прямо в модалку, для неё есть место. */
+.movie-info-rating{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;margin-top:.8rem}
 .movie-info-sep{height:1px;background:var(--md-sys-color-outline-variant);margin:.9rem 0}
 /* «Смотреть»/«Страница на Кинопоиске» — рядом друг с другом, поровну делят
    ширину (flex:1 у каждой), а не одна крупная и одна с текстом впритык. */
@@ -690,21 +567,6 @@ select{
 .title-actions{display:flex;align-items:center;gap:.1rem;margin-top:1.1rem}
 .title-actions .menu-wrap{margin-top:0}
 .appbar-inner .menu-wrap{margin-top:0}
-/* «Мой список» — кнопка «…» только по наведению/фокусу карточки (тот же
-   приём, что и у бейджа «Добавить в…» на плитке витрины, см.
-   .movie-tile-poster-wrap .menu-wrap ниже), только на устройствах с
-   реальным hover — на тач-экранах кнопка остаётся всегда видимой, иначе
-   станет недостижимой. Ограничено ИМЕННО этими двумя контейнерами (не
-   всеми .title-actions .menu-wrap) — у очереди/истории/watched кнопка
-   действий видна всегда, тут просили именно про личный список. */
-@media(hover:hover){
-  #myListItems .title-actions .menu-wrap,
-  #profileMyListItems .title-actions .menu-wrap{opacity:0;transition:opacity .15s var(--ease-std)}
-  #myListItems .movie-card:hover .title-actions .menu-wrap,
-  #myListItems .movie-card:focus-within .title-actions .menu-wrap,
-  #profileMyListItems .movie-card:hover .title-actions .menu-wrap,
-  #profileMyListItems .movie-card:focus-within .title-actions .menu-wrap{opacity:1}
-}
 
 .menu{
   position:absolute;right:0;top:calc(100% + 6px);min-width:11.5rem;z-index:10;
@@ -783,6 +645,11 @@ ul.plain li:last-child{border-bottom:0}
   padding:.7em 1.2em;border-radius:var(--md-sys-shape-corner-s);font-size:.9rem;
   box-shadow:var(--e2);transition:transform .25s var(--ease-emph-dec);pointer-events:none;
   max-width:90vw;text-align:center;
+  /* Выше .modal-backdrop (z-index:30) — иначе уведомление («Фильм добавлен…»
+     и подобные) рисуется НИЖЕ открытого окна с подробностями и не видно,
+     хотя оно последнее в DOM: z-index:30 у модалки создаёт свой стек поверх
+     любого z-index:auto соседа независимо от порядка в разметке. */
+  z-index:40;
 }
 #snack.show{transform:translate(-50%,0)}
 @media(prefers-reduced-motion:reduce){#snack{transition:none}}
@@ -823,8 +690,7 @@ ul.plain li:last-child{border-bottom:0}
 .draw-start-btn:active::after{opacity:.2}
 .draw-start-btn:disabled{opacity:.6;cursor:default;pointer-events:none;transform:none;box-shadow:var(--e1);animation:none}
 /* Общий свитч prefers-reduced-motion внизу файла (animation-duration:.01ms
-   !important на *) сам гасит пульс, отдельная медиа-запись тут не нужна —
-   тот же принцип, что у .detail-spinner/.icon-btn .chevron выше. */
+   !important на *) сам гасит пульс, отдельная медиа-запись тут не нужна. */
 
 /* Панель настроек длительности прокрутки — тот же самый .menu-wrap/.menu
    дропдаун, что и у #roomMenu/#csvMenu (не отдельная модалка, см. план

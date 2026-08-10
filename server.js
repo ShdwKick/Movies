@@ -361,8 +361,16 @@ const stmt = {
   personalListDelete: db.prepare("DELETE FROM personal_list WHERE user_id = ? AND kinopoisk_id = ?"),
   // pl_-префикс — тот же приём, что rm_/mm_ у room_movies/movie_marks: не
   // путать с одноимёнными столбцами movies при парсинге строки в moviePayload.
+  // avg_score/rating_count/my_score — та же тройка подзапросов, что и у
+  // moviesShowcasePage, но без лишнего bind-параметра: my_score коррелирует
+  // прямо с pl.user_id (эта выборка и так уже per-user), отдельный ? для
+  // него не нужен.
   personalList: db.prepare(`
-    SELECT pl.added_at AS pl_added_at, mv.*
+    SELECT pl.added_at AS pl_added_at,
+           (SELECT AVG(score) FROM movie_marks x WHERE x.kinopoisk_id = pl.kinopoisk_id AND x.score IS NOT NULL) AS avg_score,
+           (SELECT COUNT(*) FROM movie_marks x WHERE x.kinopoisk_id = pl.kinopoisk_id AND x.score IS NOT NULL) AS rating_count,
+           (SELECT score FROM movie_marks x WHERE x.user_id = pl.user_id AND x.kinopoisk_id = pl.kinopoisk_id) AS my_score,
+           mv.*
       FROM personal_list pl JOIN movies mv ON mv.kinopoisk_id = pl.kinopoisk_id
      WHERE pl.user_id = ?
      ORDER BY pl.added_at DESC`),
@@ -438,16 +446,26 @@ function roomPayload(room, me, userId) {
       userId: m.user_id, username: m.username, name: m.name,
       role: m.role, joinedAt: m.joined_at,
     })),
-    movies: stmt.roomMovies.all(room.id).map(r => ({
-      id: r.rm_id, status: r.rm_status, weight: r.rm_weight,
-      addedBy: r.rm_added_by, addedAt: r.rm_added_at, sortOrder: r.rm_sort_order,
-      // watchedAt/watchedBy — история этой КОМНАТЫ (кто и когда тут отметил
-      // просмотренным), отдельно от глобальной личной пометки в mark ниже.
-      // watchedByUsername/Name фронт сматчит сам по members (см. план).
-      watchedAt: r.rm_watched_at, watchedBy: r.rm_watched_by,
-      movie: moviePayload(r),
-      mark: markSummary(r.kinopoisk_id, userId),
-    })),
+    movies: stmt.roomMovies.all(room.id).map(r => {
+      const mark = markSummary(r.kinopoisk_id, userId);
+      return {
+        id: r.rm_id, status: r.rm_status, weight: r.rm_weight,
+        addedBy: r.rm_added_by, addedAt: r.rm_added_at, sortOrder: r.rm_sort_order,
+        // watchedAt/watchedBy — история этой КОМНАТЫ (кто и когда тут отметил
+        // просмотренным), отдельно от глобальной личной пометки в mark ниже.
+        // watchedByUsername/Name фронт сматчит сам по members (см. план).
+        watchedAt: r.rm_watched_at, watchedBy: r.rm_watched_by,
+        // avgScore/ratingCount/myScore продублированы ВНУТРЬ movie (а не
+        // только в mark) — единая карточка (renderMovieTile) читает их прямо
+        // с объекта фильма одинаково везде (витрина/очередь/история/
+        // просмотрено/мой список), без разбора «а тут они лежат отдельным
+        // полем» по каждому экрану отдельно. mark оставлен как есть — им всё
+        // ещё пользуется renderHistoryCard (watched-флаг конкретной комнаты
+        // тут ни при чём, это ГЛОБАЛЬНАЯ пометка).
+        movie: { ...moviePayload(r), avgScore: mark.avgScore, ratingCount: mark.ratingCount, myScore: mark.myScore },
+        mark,
+      };
+    }),
   };
 }
 
@@ -554,6 +572,10 @@ function moviePayload(row) {
     // «оценка ноль»).
     avgScore: row.avg_score !== undefined ? (row.avg_score == null ? null : Math.round(row.avg_score * 10) / 10) : undefined,
     ratingCount: row.rating_count,
+    // Тот же приём, что у avgScore чуть выше — поле есть, только если сам
+    // запрос его подобрал (moviesShowcasePage/personalList ниже), иначе
+    // остаётся undefined и не попадает в JSON.
+    myScore: row.my_score !== undefined ? row.my_score : undefined,
   };
 }
 
@@ -586,16 +608,17 @@ const MOVIES_SORT_ORDER = {
  * же, не на инициализации — вариантов ORDER BY несколько, кэшировать
  * подготовленные запросы на личном проекте такого масштаба не имеет смысла.
  */
-function moviesShowcasePage(limit, offset, sort) {
+function moviesShowcasePage(limit, offset, sort, userId) {
   const orderBy = MOVIES_SORT_ORDER[sort] || MOVIES_SORT_ORDER.recent;
   const rows = db.prepare(`
     SELECT movies.*,
            (SELECT AVG(score) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS avg_score,
-           (SELECT COUNT(*) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS rating_count
+           (SELECT COUNT(*) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS rating_count,
+           (SELECT score FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_score
       FROM movies
      ORDER BY ${orderBy}
      LIMIT ? OFFSET ?
-  `).all(limit, offset);
+  `).all(userId, limit, offset);
   return rows;
 }
 
@@ -946,7 +969,7 @@ async function api(req, res, seg, user, query) {
     // Неизвестный/отсутствующий sort — молча падаем на recent (не 400):
     // whitelist проверяется внутри moviesShowcasePage через MOVIES_SORT_ORDER.
     const sort = query.get("sort") || "recent";
-    const rows = moviesShowcasePage(limit, offset, sort);
+    const rows = moviesShowcasePage(limit, offset, sort, user.id);
     const total = stmt.moviesCount.get().n;
     return json(res, 200, { movies: rows.map(moviePayload), total, limit, offset });
   }
@@ -965,10 +988,15 @@ async function api(req, res, seg, user, query) {
     try { movie = await ensureMovieCached(kpId); }
     catch (e) { return poiskkinoError(res, e); }
     // Ответ — moviePayload() как есть, без обёртки {movie: ...}: фронт
-    // (bindMovieDetailToggle) делает Object.assign(mv, data) прямо поверх
+    // (openMovieInfoModal) делает Object.assign(mv, data) прямо поверх
     // объекта результата поиска — обёртка потребовала бы data.movie и
     // отдельного разбора на вызывающей стороне без всякой пользы.
-    return json(res, 200, moviePayload(movie));
+    // avgScore/ratingCount/myScore домешаны отдельно (markSummary) — сам
+    // ensureMovieCached отдаёт голую строку movies без этих подзапросов, а
+    // именно этот эндпоинт — единственное место, где карточка результата
+    // поиска (ещё нигде не оценённая с фронта) подтягивает оценку впервые.
+    const mark = markSummary(kpId, user.id);
+    return json(res, 200, { ...moviePayload(movie), avgScore: mark.avgScore, ratingCount: mark.ratingCount, myScore: mark.myScore });
   }
 
   // ── лента «Что мы смотрели» (мои просмотренные, глобально) ───

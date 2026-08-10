@@ -247,7 +247,12 @@ async function renderCachedMovies(rooms) {
   const box = $("cachedMoviesList");
   box.textContent = "";
   openCardMenu = null; // старые плитки со своими меню-«…» уходят целиком
-  for (const mv of data.movies) box.append(renderMovieTile(mv, rooms));
+  for (const mv of data.movies) {
+    box.append(renderMovieTile(mv, {
+      menu: renderAddToMenu(mv.kinopoiskId, rooms),
+      rating: { kinopoiskId: mv.kinopoiskId, score: mv.myScore },
+    }));
+  }
 
   // Пейджер прячется целиком, если всё помещается на одну страницу — но
   // #cachedSortSelect (уже видимый вместе со всем wrap) остаётся видимым
@@ -333,15 +338,30 @@ function renderHomeSearchResults(movies, rooms) {
 // виде компактной icon-btn.xs: там место для текста есть, тут нет.
 const PLAY_ICON = '<svg class="icon" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8V4z"/></svg>';
 
-/** Компактная плитка витрины — постер (с меню «Добавить в…», renderAddToMenu,
-    бейджем в правом верхнем углу поверх обложки) и строка название/год с
-    кнопкой «Смотреть» (kinopoiskCxUrl в новой вкладке) у правого края той же
-    строки. Клик по САМОЙ плитке (не по вложенным кнопкам) по-прежнему
-    открывает #movieInfoModalBackdrop. tile больше не <button> (внутри свои
-    кнопки — <button> в <button> невалиден) — div[role=button][tabindex=0] со
-    своим keydown на Enter/Space, тот же приём, что у .movie-card-pick
-    (renderMovieResultCard). */
-function renderMovieTile(mv, rooms) {
+/** Единая компактная карточка фильма — постер (с меню действий, бейджем в
+    правом верхнем углу поверх обложки), кружок личной оценки слева от
+    названия, название/год и кнопка «Смотреть» (kinopoiskCxUrl в новой
+    вкладке) у правого края строки названия. Раньше это была только плитка
+    витрины «Из базы» — теперь ЕДИНСТВЕННЫЙ вид карточки фильма по всему
+    сервису (очередь комнаты, история, «Что мы смотрели», «Мой список» —
+    см. renderMovieCard/renderHistoryCard/renderWatchedInto/renderMyListInto
+    ниже, все четыре стали тонкими обёртками вокруг этой функции). Клик по
+    САМОЙ карточке (не по вложенным кнопкам/меню/кружку оценки) открывает
+    модалку «Фильм» (openMovieInfoModal — сама подгружает список комнат и
+    недостающие подробности, повторного запроса тут заводить не нужно).
+    tile — не <button> (внутри свои кнопки — <button> в <button> невалиден)
+    — div[role=button][tabindex=0] со своим keydown на Enter/Space, тот же
+    приём, что у .movie-card-pick (renderMovieResultCard).
+
+    opts:
+      menu      — готовый DOM-узел меню действий (renderAddToMenu ИЛИ
+                  renderCardMenu со своим набором пунктов под конкретный
+                  экран) — бейджем поверх постера.
+      rating    — {kinopoiskId, score} — если передано, рисует кружок личной
+                  оценки (renderRatingBadge) слева от названия.
+      extraLine — доп. muted-строка под годом (например, дата просмотра у
+                  истории) — просто текст, разметку сама не решает. */
+function renderMovieTile(mv, opts = {}) {
   const tile = el("div", "movie-tile");
   tile.setAttribute("role", "button");
   tile.tabIndex = 0;
@@ -353,22 +373,33 @@ function renderMovieTile(mv, rooms) {
       <div class="movie-tile-title-col">
         <div class="title">${esc(mv.title)}</div>
         ${mv.year ? `<div class="muted sub">${esc(mv.year)}</div>` : ""}
+        ${opts.extraLine ? `<div class="muted sub">${esc(opts.extraLine)}</div>` : ""}
       </div>
     </div>`;
 
-  const openInfo = () => {
-    renderMovieInfoModal(mv, rooms);
-    openModal("movieInfoModalBackdrop");
-  };
-  tile.onclick = openInfo;
+  const openInfo = () => openMovieInfoModal(mv);
+  tile.onclick = e => { if (!e.target.closest("button")) openInfo(); };
   tile.addEventListener("keydown", e => {
+    if (e.target.closest("button")) return;
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openInfo(); }
   });
 
-  // Меню «Добавить в…» — бейджем поверх обложки (см. .movie-tile-poster-wrap
-  // .menu-wrap в styles.css), renderAddToMenu уже гасит клики stopPropagation
-  // на всей обёртке — своего обработчика тут не нужно.
-  tile.querySelector(".movie-tile-poster-wrap").append(renderAddToMenu(mv.kinopoiskId, rooms));
+  const posterWrap = tile.querySelector(".movie-tile-poster-wrap");
+  // Меню действий — бейджем в ВЕРХНЕМ правом углу поверх обложки (см.
+  // .movie-tile-poster-wrap .menu-wrap в styles.css), renderCardMenu уже
+  // гасит клики stopPropagation на всей обёртке — своего обработчика тут не
+  // нужно.
+  if (opts.menu) posterWrap.append(opts.menu);
+
+  // Кружок оценки — НИЖНИМ правым углом поверх обложки, только когда оценка
+  // реально есть (её не поставить с компактной карточки, это делают через
+  // звёзды в модалке «Фильм» — renderMovieInfoModal; кружок тут просто
+  // показывает уже стоящее число и даёт быстро его поменять/снять через
+  // openRateModal).
+  if (opts.rating && opts.rating.score) {
+    const badge = renderRatingBadge(opts.rating.kinopoiskId, opts.rating.score, score => { mv.myScore = score; });
+    posterWrap.append(badge);
+  }
 
   const watchBtn = el("button", "icon-btn xs");
   watchBtn.type = "button";
@@ -388,10 +419,13 @@ function renderMovieTile(mv, rooms) {
     ширину модалки (.movie-info-poster, aspect-ratio:2/3 — сохраняет
     пропорции, поэтому блок стал выше, а не просто шире), под ним в одну
     строку название+год слева и чипы-рейтинги справа (.movie-info-caption),
-    разделитель, затем режиссёр/актёры/описание (тот же формат, что
-    «Подробнее» у карточки очереди — renderMovieDetail, но тут без
-    сворачивания, это и есть весь контент модалки), и внизу рядом друг с
-    другом «Смотреть»/«Страница на Кинопоиске» (.movie-info-actions).
+    затем строка личной оценки (.movie-info-rating — обычная шкала из 10
+    звёзд, renderStarRating, тот же компонент, что и в кружке-бейдже
+    компактной карточки, см. renderRatingBadge/openRateModal ниже), затем
+    разделитель, режиссёр/актёры/описание (тот же формат, что «Подробнее» у
+    карточки очереди — renderMovieDetail, но тут без сворачивания, это и
+    есть весь контент модалки), и внизу рядом друг с другом «Смотреть»/
+    «Страница на Кинопоиске» (.movie-info-actions).
     Меню «Добавить в…» — по-прежнему в шапке модалки рядом с крестиком
     закрытия (см. ниже #movieInfoModalMenuWrap), не над постером. */
 function renderMovieInfoModal(mv, rooms) {
@@ -406,12 +440,21 @@ function renderMovieInfoModal(mv, rooms) {
       <div class="title">${esc(mv.title)}${esc(year)}</div>
       <div class="chip-row">${movieChipsHtml(mv)}</div>
     </div>
+    <div class="movie-info-rating">
+      <span class="muted">Ваша оценка</span>
+      <div data-act="myRating"></div>
+    </div>
     <div class="movie-info-sep"></div>
     <div class="movie-detail"></div>
     <div class="row movie-info-actions">
       <button class="btn filled" id="movieInfoWatchBtn">${PLAY_ICON}<span>Смотреть</span></button>
       <button class="btn outlined" id="movieInfoKpBtn">Страница на Кинопоиске</button>
     </div>`;
+
+  // onRated не перерисовывает chip-row/avgScore здесь — сервер пересчитает
+  // среднюю только при следующей полной загрузке данных (та же логика, что
+  // раньше была у карточки истории, просто перенесённая в модалку).
+  renderStarRating(body.querySelector('[data-act="myRating"]'), mv.kinopoiskId, mv.myScore, score => { mv.myScore = score; });
 
   const roles = [];
   if (mv.director) roles.push(`<p><b>Режиссёр:</b> ${esc(mv.director)}</p>`);
@@ -455,24 +498,6 @@ async function openMovieInfoModal(mv) {
   const roomsData = await act(() => api("/rooms"));
   renderMovieInfoModal(mv, roomsData ? roomsData.rooms : []);
   openModal("movieInfoModalBackdrop");
-}
-
-/** Делает всю карточку (очередь/история/watched/мой список) кликабельной
-    для открытия той же модалки «Фильм», что и у плитки витрины — единый
-    способ посмотреть полную карточку фильма по всему сервису. Все
-    интерактивные элементы ВНУТРИ карточки (кнопки меню, "Смотреть", звёзды
-    оценки) — это <button>, поэтому единая проверка e.target.closest("button")
-    отсекает клики по ним, не давая им всплыть в открытие модалки. */
-function bindMovieCardInfoOpen(card, mv) {
-  card.classList.add("movie-card-clickable");
-  card.setAttribute("role", "button");
-  card.tabIndex = 0;
-  const open = () => openMovieInfoModal(mv);
-  card.addEventListener("click", e => { if (!e.target.closest("button")) open(); });
-  card.addEventListener("keydown", e => {
-    if (e.target.closest("button")) return;
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
-  });
 }
 
 // Пагинация комнат — целиком на фронте (список и так уже загружен целиком
@@ -580,12 +605,18 @@ function renderRoom() {
 // ───────────────────────── фильмы ─────────────────────────
 /** Жанры и рейтинги — раньше одна строка текста через точку, теперь чипы
     (см. .chip в styles.css): жанры отдельным чипом, каждый рейтинг своим,
-    подкрашенным как .chip.rating. */
+    подкрашенным как .chip.rating. BH — средняя оценка внутри НАШЕГО
+    сервиса (mv.avgScore, агрегат movie_marks, см. markSummary на бэке), не
+    путать с kpRating/imdbRating — это Кинопоиск/IMDb, они приходят с
+    poiskkino.dev и тут же рядом просто для сравнения. avgScore есть не у
+    каждого mv — только там, где сервер сам его подобрал (см. комментарий у
+    moviePayload в server.js), поэтому чип условный, как и остальные. */
 function movieChipsHtml(mv) {
   const chips = [];
   if (mv.genres.length) chips.push(`<span class="chip">${esc(mv.genres.join(", "))}</span>`);
   if (mv.kpRating) chips.push(`<span class="chip rating">КП ${esc(mv.kpRating)}</span>`);
   if (mv.imdbRating) chips.push(`<span class="chip rating">IMDb ${esc(mv.imdbRating)}</span>`);
+  if (mv.avgScore != null) chips.push(`<span class="chip rating">BH ${esc(mv.avgScore)}</span>`);
   return chips.join("");
 }
 
@@ -728,7 +759,7 @@ function renderSearchResultRow(mv, rooms) {
 }
 
 function renderMovies() {
-  const { room, members, movies } = state.room;
+  const { room, movies } = state.room;
   // Очередь и история — разные списки: очередь только queued, история —
   // только watched, самое недавнее сверху (см. план задачи «история
   // просмотров по комнатам»). watchedAt/watchedBy тут — состояние ИМЕННО
@@ -746,7 +777,7 @@ function renderMovies() {
   $("movieHistoryEmpty").hidden = history.length > 0;
   const historyList = $("movieHistoryList");
   historyList.textContent = "";
-  for (const rm of history) historyList.append(renderHistoryCard(rm, room, members));
+  for (const rm of history) historyList.append(renderHistoryCard(rm, room));
 
   // «Крутить» видна только когда есть из чего реально выбирать — розыгрыш
   // одного фильма ничего не решает, хоть сервер такое и не запрещает.
@@ -797,32 +828,50 @@ function renderStarRating(container, kinopoiskId, currentScore, onRated) {
   container.append(scoreLabel);
 }
 
-/** Обёртка над renderStarRating для мест, где держать открытую шкалу из
-    десяти звёзд для КАЖДОЙ карточки сразу избыточно (лента «Что мы
-    смотрели» — много карточек подряд, у большинства уже есть оценка):
-    если оценка уже стоит — показываем компактную цифру (.rating-chip),
-    клик по ней разворачивает полную шкалу для изменения; если оценки нет —
-    сразу открытая шкала, чтобы поставить оценку в один клик, без лишнего
-    разворачивания. */
-function renderRatingToggle(container, kinopoiskId, currentScore, onRated) {
-  const showStars = () => {
-    container.textContent = "";
-    renderStarRating(container, kinopoiskId, currentScore, score => {
-      currentScore = score;
+/** Кружок личной оценки нижним правым углом поверх обложки на компактной
+    карточке (renderMovieTile) — только число, без звезды: показывается,
+    только когда оценка реально есть (renderMovieTile сам решает, звать эту
+    функцию или нет — см. её вызов). Поставить ПЕРВУЮ оценку с компактной
+    карточки нельзя — для этого есть шкала звёзд в модалке «Фильм»
+    (renderMovieInfoModal); этот кружок — быстрый способ увидеть и
+    поменять/снять уже стоящую. Клик открывает #rateModalBackdrop
+    (openRateModal) с той же шкалой и кнопкой «Готово». Если оценку сняли —
+    кружку больше нечего показывать, убираем его из DOM целиком, а не
+    откатываем на пустую звезду (её больше нет, см. правку). stopPropagation
+    — клик по кружку не должен открывать модалку «Фильм» саму по себе
+    (кружок сидит внутри кликабельной целиком плитки). */
+function renderRatingBadge(kinopoiskId, score, onRated) {
+  const badge = el("button", "rating-badge", String(score));
+  badge.type = "button";
+  const label = s => `Ваша оценка: ${s} из 10 — изменить`;
+  badge.title = label(score);
+  badge.setAttribute("aria-label", badge.title);
+  badge.onclick = e => {
+    e.stopPropagation();
+    openRateModal(kinopoiskId, score, newScore => {
+      score = newScore;
+      if (!score) { badge.remove(); }
+      else {
+        badge.textContent = String(score);
+        badge.title = label(score);
+        badge.setAttribute("aria-label", badge.title);
+      }
       if (onRated) onRated(score);
-      if (score) showChip(); else showStars();
     });
   };
-  const showChip = () => {
-    container.textContent = "";
-    container.classList.remove("star-rating");
-    const btn = el("button", "rating-chip", `★ ${currentScore}`);
-    btn.type = "button";
-    btn.title = "Изменить оценку";
-    btn.onclick = () => showStars();
-    container.append(btn);
-  };
-  if (currentScore) showChip(); else showStars();
+  return badge;
+}
+
+/** Окошко «Оценка» (#rateModalBackdrop, разметка — index.html) — открывается
+    из renderRatingBadge. Тело каждый раз перерисовывается заново тем же
+    renderStarRating, что и везде — «Готово» просто закрывает модалку, сама
+    оценка уже сохранена на сервере кликом по звезде (see renderStarRating),
+    отдельного «сохранить» не нужно. */
+function openRateModal(kinopoiskId, currentScore, onRated) {
+  const body = $("rateModalBody");
+  body.textContent = "";
+  renderStarRating(body, kinopoiskId, currentScore, score => { if (onRated) onRated(score); });
+  openModal("rateModalBackdrop");
 }
 
 const CHEVRON_DOWN_ICON = '<svg class="icon chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
@@ -868,54 +917,48 @@ document.addEventListener("click", e => {
   if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) closeCardMenu();
 });
 
-/** Меню «Добавить в…» — компактная замена ВСЕГДА-видимого renderRoomPicker
-    для мест, где место ЖАЛКО (узкая плитка/список результатов): плитка
-    витрины (renderMovieTile), строка результата глобального поиска
-    (renderSearchResultRow) и модалка «Фильм» (renderMovieInfoModal).
-    Кнопка-триггер (три точки) + .menu с ДВУМЯ пунктами верхнего уровня —
-    «Добавить в комнату» и «В личный список» — тот же разметочный паттерн
-    (data-act="cardMenuBtn"/"cardMenu"), что и меню действий карточки
-    очереди/истории выше, поэтому открытие/закрытие переиспользует ТОТ ЖЕ
-    механизм (bindMovieCardMenu/closeCardMenu/module-level openCardMenu) — не
-    отдельный третий. «В личный список» — сразу выполняет действие (POST
-    /my-list), «Добавить в комнату» подменяет содержимое ТОГО ЖЕ .menu на
-    renderRoomPicker (select комнат + кнопка) — сам пикер, без второй кнопки
-    личного списка, она теперь отдельным пунктом уровнем выше.
+/** Универсальное меню-«…» карточки (бейджем поверх постера у компактной
+    плитки — renderMovieTile — или где ещё понадобится) — единая точка,
+    из которой все конкретные меню по сервису (добавить в…, действия
+    очереди/истории, действия «моего списка») собирают СВОЙ набор пунктов.
+    items — [{label, danger, onClick(menu)}] в порядке показа. onClick
+    получает сам DOM-узел .menu — нужно тем пунктам, что подменяют его
+    содержимое (напр. «Добавить в комнату» → renderRoomPicker); остальные
+    просто делают действие (обычно через act(...)) и сами вызывают
+    closeCardMenu(), если её нужно закрыть сразу.
 
-    Баг, который тут чинится: .menu — один и тот же DOM-узел на всё время
-    жизни меню, а его содержимое ПОДМЕНЯЕТСЯ (menu.innerHTML = ...) при
-    выборе «Добавить в комнату». closeCardMenu() только прячет узел
+    Баг, который тут чинится централизованно (раньше правился в трёх местах
+    по отдельности — renderAddToMenu/renderWatchedInto/renderMyListInto):
+    .menu — один и тот же DOM-узел на всё время жизни меню, а некоторые
+    пункты ПОДМЕНЯЮТ его содержимое. closeCardMenu() только прячет узел
     (menu.hidden = true), содержимое не сбрасывает — без явного сброса
-    следующее открытие того же меню показывало бы застрявший пикер комнат
-    вместо исходных двух пунктов. Чиним оборачиванием onclick, который уже
-    повесил bindMovieCardMenu: при переходе «было закрыто → стало открыто»
-    (не при закрытии и не при повторном клике по уже открытому) перерисовываем
-    .menu заново тем же initialHtml. wrap.onclick(stopPropagation) — чтобы
-    клики внутри меню не всплывали до кликабельных родителей (плитка витрины
-    целиком открывает модалку по клику). */
-function renderAddToMenu(kinopoiskId, rooms) {
+    следующее открытие показывало бы застрявшее чужое содержимое вместо
+    исходного списка items. Чиним оборачиванием onclick, который уже повесил
+    bindMovieCardMenu: при переходе «было закрыто → стало открыто»
+    перерисовываем .menu заново тем же items. wrap.onclick(stopPropagation) —
+    чтобы клики внутри меню не всплывали до кликабельных родителей (плитка
+    витрины целиком открывает модалку по клику). */
+function renderCardMenu(items, opts = {}) {
   const wrap = el("div", "menu-wrap");
-  const menuInitialHtml = `
-    <button class="menu-item" data-act="addRoom">Добавить в комнату</button>
-    <button class="menu-item" data-act="addList">В личный список</button>`;
+  const title = opts.title || "Действия с фильмом";
   wrap.innerHTML = `
-    <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Добавить в…" aria-label="Добавить в…" aria-haspopup="true" aria-expanded="false">
+    <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="${esc(title)}" aria-label="${esc(title)}" aria-haspopup="true" aria-expanded="false">
       <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
     </button>
-    <div class="menu" data-act="cardMenu" hidden>${menuInitialHtml}</div>`;
+    <div class="menu" data-act="cardMenu" hidden></div>`;
   wrap.onclick = e => e.stopPropagation();
 
   const menu = wrap.querySelector('[data-act="cardMenu"]');
-  function bindMenuItems() {
-    menu.querySelector('[data-act="addRoom"]').onclick = () => {
-      menu.innerHTML = "";
-      renderRoomPicker(menu, kinopoiskId, rooms);
-    };
-    menu.querySelector('[data-act="addList"]').onclick = () => act(async () => {
-      await api("/my-list", { method: "POST", body: { kinopoiskId } });
-    }, "Добавлено в личный список");
-  }
-  bindMenuItems();
+  const renderItems = () => {
+    menu.innerHTML = "";
+    for (const item of items) {
+      const btn = el("button", "menu-item" + (item.danger ? " danger" : ""), item.label);
+      btn.type = "button";
+      btn.onclick = () => item.onClick(menu);
+      menu.append(btn);
+    }
+  };
+  renderItems();
 
   bindMovieCardMenu(wrap);
   const btn = wrap.querySelector('[data-act="cardMenuBtn"]');
@@ -923,132 +966,76 @@ function renderAddToMenu(kinopoiskId, rooms) {
   btn.onclick = e => {
     const wasHidden = menu.hidden;
     toggle(e);
-    if (wasHidden && !menu.hidden) {
-      menu.innerHTML = menuInitialHtml;
-      bindMenuItems();
-    }
+    if (wasHidden && !menu.hidden) renderItems();
   };
   return wrap;
 }
 
-// Карточка очереди — только queued (watched теперь отдельным списком в
-// renderHistoryCard ниже, см. renderMovies). Раскладка — сетка .queue-grid
-// (index.html): карточка у́же прежней, стрелка «Подробнее» и меню-«…»
-// стоят в углу через .title-row/.title-actions. «Смотреть» (.movie-card-footer)
-// теперь внутри .movie-info, прижата к низу колонки — та же высокая обложка,
-// что и у истории (см. styles.css), делает текстовый блок короче постера,
-// и кнопка занимает освободившееся место, а не висит отдельным рядом ниже.
-function renderMovieCard(rm, room) {
-  const mv = rm.movie;
-  const card = el("div", "movie-card");
-  const year = mv.year ? ` (${mv.year})` : "";
-  card.innerHTML = `
-    <div class="title-row">
-      <div class="movie-card-head">
-        ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
-        <div class="movie-info">
-          <div class="movie-info-top">
-            <div class="title">${esc(mv.title)}${esc(year)}</div>
-            <div class="chip-row">${movieChipsHtml(mv)}</div>
-          </div>
-        </div>
-      </div>
-      <div class="title-actions">
-        <button class="icon-btn xs" data-act="watch" type="button" title="Смотреть" aria-label="Смотреть">${PLAY_ICON}</button>
-        <div class="menu-wrap">
-          <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Действия с фильмом" aria-label="Действия с фильмом" aria-haspopup="true" aria-expanded="false">
-            <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
-          </button>
-          <div class="menu" data-act="cardMenu" hidden>
-            <button class="menu-item" data-act="watched">Отметить просмотренным</button>
-            <button class="menu-item danger" data-act="remove">Убрать из комнаты</button>
-          </div>
-        </div>
-      </div>
-    </div>`;
-
-  bindMovieCardInfoOpen(card, mv);
-  bindMovieCardMenu(card);
-
-  card.querySelector('[data-act="watched"]').onclick = () => act(async () => {
-    closeCardMenu();
-    await api(`/rooms/${room.id}/movies/${mv.kinopoiskId}/watched`, { method: "POST" });
-    await openRoom(room.id);
-  }, "Отмечено просмотренным");
-
-  card.querySelector('[data-act="remove"]').onclick = () => act(async () => {
-    closeCardMenu();
-    await api(`/rooms/${room.id}/movies/${mv.kinopoiskId}`, { method: "DELETE" });
-    await openRoom(room.id);
-  }, "Фильм убран из комнаты");
-
-  // «Смотреть» — прямой доступ к тому же kinopoisk.cx/film/<id>/, что и на
-  // экране розыгрыша (drawKpBtn); функция не дублируется.
-  card.querySelector('[data-act="watch"]').onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
-
-  return card;
+/** Меню «Добавить в…» — компактная замена ВСЕГДА-видимого renderRoomPicker
+    для мест, где место ЖАЛКО (узкая плитка/список результатов): плитка
+    витрины (renderMovieTile), строка результата глобального поиска
+    (renderSearchResultRow) и модалка «Фильм» (renderMovieInfoModal). «В
+    личный список» — сразу выполняет действие (POST /my-list), «Добавить в
+    комнату» подменяет содержимое .menu на renderRoomPicker (select комнат +
+    кнопка) — сам пикер, без второй кнопки личного списка, она отдельным
+    пунктом уровнем выше. */
+function renderAddToMenu(kinopoiskId, rooms) {
+  return renderCardMenu([
+    { label: "Добавить в комнату", onClick: menu => renderRoomPicker(menu, kinopoiskId, rooms) },
+    { label: "В личный список", onClick: () => act(() => api("/my-list", { method: "POST", body: { kinopoiskId } }), "Добавлено в личный список") },
+  ], { title: "Добавить в…" });
 }
 
-// Карточка истории — watched в ЭТОЙ комнате: кто и когда отметил (watchedBy
-// сматчен на фронте по members, т.к. на бэке джойна нет — см. план), плюс
-// личная/средняя оценка (уместна тут же, раз фильм уже просмотрен).
-// В отличие от карточки очереди тут нет ни стрелки «Подробнее», ни
-// разворачивания: описание короткое и видно сразу (.movie-desc-preview,
-// line-clamp в styles.css), а «Вернуть в очередь» — единственный пункт
-// в меню-«…» в углу (тот же bindMovieCardMenu/closeCardMenu, что и у
-// карточки очереди, — общий механизм закрытия по клику снаружи уже
-// подключён один раз на весь документ, см. document.addEventListener
-// выше по файлу).
-function renderHistoryCard(rm, room, members) {
+// Карточка очереди — только queued (watched теперь отдельным списком в
+// renderHistoryCard ниже, см. renderMovies). Тонкая обёртка вокруг единой
+// renderMovieTile (см. её шапку) — своё тут только меню действий
+// («Отметить просмотренным»/«Убрать из комнаты»).
+function renderMovieCard(rm, room) {
   const mv = rm.movie;
-  const card = el("div", "movie-card");
-  const year = mv.year ? ` (${mv.year})` : "";
-  const watcher = members.find(m => m.userId === rm.watchedBy);
-  const whoText = watcher ? who(watcher) : "кто-то из участников";
+  const menu = renderCardMenu([
+    {
+      label: "Отметить просмотренным",
+      onClick: () => act(async () => {
+        closeCardMenu();
+        await api(`/rooms/${room.id}/movies/${mv.kinopoiskId}/watched`, { method: "POST" });
+        await openRoom(room.id);
+      }, "Отмечено просмотренным"),
+    },
+    {
+      label: "Убрать из комнаты", danger: true,
+      onClick: () => act(async () => {
+        closeCardMenu();
+        await api(`/rooms/${room.id}/movies/${mv.kinopoiskId}`, { method: "DELETE" });
+        await openRoom(room.id);
+      }, "Фильм убран из комнаты"),
+    },
+  ]);
+  return renderMovieTile(mv, { menu, rating: { kinopoiskId: mv.kinopoiskId, score: mv.myScore } });
+}
+
+// Карточка истории — watched в ЭТОЙ комнате. Тоже тонкая обёртка вокруг
+// renderMovieTile: своё тут только «Вернуть в очередь» в меню и дата
+// просмотра доп. строкой (без «кем» — так попросили, у карточки для этого
+// нет места; кто именно отметил, по-прежнему видно в самой комнате через
+// watchedBy, если понадобится).
+function renderHistoryCard(rm, room) {
+  const mv = rm.movie;
   const whenText = rm.watchedAt ? new Date(rm.watchedAt).toLocaleDateString("ru") : "—";
-  card.innerHTML = `
-    <div class="history-body">
-      <div class="history-main">
-        <div class="movie-card-head">
-          ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
-          <div class="movie-info">
-            <div class="movie-info-top">
-              <div class="title">${esc(mv.title)}${esc(year)}</div>
-              <div class="chip-row">${movieChipsHtml(mv)}</div>
-              <div class="muted sub">Просмотрено ${esc(whenText)} · ${esc(whoText)}</div>
-            </div>
-            <div class="score-row">
-              <div data-act="score"></div>
-              <span class="muted">${rm.mark.avgScore != null ? `Средняя: ${rm.mark.avgScore}${rm.mark.ratingCount > 1 ? ` (${rm.mark.ratingCount})` : ""}` : "Средней оценки пока нет"}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-      ${mv.description ? `<div class="history-desc"><p class="movie-desc-preview">${esc(mv.description)}</p></div>` : ""}
-      <div class="history-menu">
-        <div class="menu-wrap">
-          <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Действия с фильмом" aria-label="Действия с фильмом" aria-haspopup="true" aria-expanded="false">
-            <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
-          </button>
-          <div class="menu" data-act="cardMenu" hidden>
-            <button class="menu-item" data-act="watched">Вернуть в очередь</button>
-          </div>
-        </div>
-      </div>
-    </div>`;
-
-  bindMovieCardMenu(card);
-  bindMovieCardInfoOpen(card, mv);
-
-  card.querySelector('[data-act="watched"]').onclick = () => act(async () => {
-    closeCardMenu();
-    await api(`/rooms/${room.id}/movies/${mv.kinopoiskId}/watched`, { method: "DELETE" });
-    await openRoom(room.id);
-  }, "Возвращено в очередь");
-
-  renderStarRating(card.querySelector('[data-act="score"]'), mv.kinopoiskId, rm.mark.myScore, () => openRoom(room.id));
-
-  return card;
+  const menu = renderCardMenu([
+    {
+      label: "Вернуть в очередь",
+      onClick: () => act(async () => {
+        closeCardMenu();
+        await api(`/rooms/${room.id}/movies/${mv.kinopoiskId}/watched`, { method: "DELETE" });
+        await openRoom(room.id);
+      }, "Возвращено в очередь"),
+    },
+  ]);
+  return renderMovieTile(mv, {
+    menu,
+    rating: { kinopoiskId: mv.kinopoiskId, score: mv.myScore },
+    extraLine: `Просмотрено ${whenText}`,
+  });
 }
 
 // ───────────────────────── CSV экспорт/импорт ─────────────────────────
@@ -1337,6 +1324,12 @@ $("addMovieBtn").onclick = () => {
 // Модалка «Фильм» (плитка витрины «Из базы») — своей кнопки-открывашки нет,
 // открывается из renderMovieTile() по клику на конкретную плитку.
 bindModal("movieInfoModalBackdrop", null, "movieInfoModalClose");
+
+// Модалка «Оценка» (кружок личной оценки на компактной карточке) — своей
+// кнопки-открывашки нет, открывается из renderRatingBadge/openRateModal.
+// «Готово» просто закрывает: сама оценка уже сохранена кликом по звезде.
+bindModal("rateModalBackdrop", null, "rateModalClose");
+$("rateModalDoneBtn").onclick = () => closeModal("rateModalBackdrop");
 
 // ───────────────────────── глобальный поиск (шапка, любая комната) ─────────────────────────
 // Больше не модалка — тот же принцип, что у поиска на главной
@@ -2223,73 +2216,28 @@ async function showWatched() {
   renderWatchedInto($("watchedList"), data.movies);
 }
 
-// Блоки — тот же .queue-grid + .movie-card, что и очередь комнаты
-// (renderMovieCard): контейнер несёт class="queue-grid" в index.html, а
-// .queue-grid .movie-poster/.movie-info в styles.css уже сами по себе дают
-// крупную обложку и .movie-info-top-раскладку — тут не переопределяется,
-// просто та же разметка, что и у карточки очереди. «Смотреть» — в
-// .movie-card-footer (тот же приём, что и у очереди/личного списка), а
-// личная оценка — через renderRatingToggle (цифра, если уже оценено, иначе
-// сразу шкала звёзд); средняя оценка сервиса остаётся отдельной строкой
-// текста рядом, её эта карточка не редактирует.
+// Тонкая обёртка вокруг renderMovieTile — своё тут только меню («Добавить в
+// комнату», подгружает список комнат лениво при открытии) и merge personal
+// myScore в mv: watchedList на бэке отдаёт его отдельным полем it.myScore
+// (не внутри moviePayload — там уже занято avgScore/ratingCount из того же
+// подзапроса), renderMovieTile/openMovieInfoModal читают его прямо с mv.
 function renderWatchedInto(container, items) {
   container.textContent = "";
   for (const it of items) {
-    const mv = it.movie;
-    const card = el("div", "movie-card");
-    const year = mv.year ? ` (${mv.year})` : "";
-    const avgText = it.avgScore != null ? `средняя ${it.avgScore}${it.ratingCount > 1 ? ` (${it.ratingCount})` : ""}` : "Средней оценки пока нет";
-    card.innerHTML = `
-      <div class="title-row">
-        <div class="movie-card-head">
-          ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
-          <div class="movie-info">
-            <div class="movie-info-top">
-              <div class="title">${esc(mv.title)}${esc(year)}</div>
-              <div class="chip-row">${movieChipsHtml(mv)}</div>
-              <div class="score-row">
-                <div data-act="rating"></div>
-                <span class="muted">${esc(avgText)}</span>
-              </div>
-            </div>
-            <div class="movie-card-footer">
-              <button class="btn tonal" data-act="watch">Смотреть</button>
-            </div>
-          </div>
-        </div>
-        <div class="title-actions">
-          <div class="menu-wrap">
-            <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Действия с фильмом" aria-label="Действия с фильмом" aria-haspopup="true" aria-expanded="false">
-              <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
-            </button>
-            <div class="menu" data-act="cardMenu" hidden></div>
-          </div>
-        </div>
-      </div>`;
-
-    card.querySelector('[data-act="watch"]').onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
-    renderRatingToggle(card.querySelector('[data-act="rating"]'), mv.kinopoiskId, it.myScore);
-
-    // «Добавить в комнату» — единственный пункт меню-«…», тем же приёмом,
-    // что и в renderMyListInto: клик подгружает список комнат и подменяет
-    // .menu на renderRoomPicker. stopPropagation на menu-wrap — та же защита
-    // от закрытия меню самим собой при подмене содержимого (см. подробный
-    // комментарий в renderMyListInto).
-    card.querySelector(".menu-wrap").onclick = e => e.stopPropagation();
-    const menu = card.querySelector('[data-act="cardMenu"]');
-    menu.innerHTML = '<button class="menu-item" data-act="addRoom">Добавить в комнату</button>';
-    menu.querySelector('[data-act="addRoom"]').onclick = async () => {
-      menu.innerHTML = '<p class="muted" style="padding:.5em .8em">Загрузка…</p>';
-      const data = await act(() => api("/rooms"));
-      if (!data || menu.hidden) return;
-      menu.innerHTML = "";
-      renderRoomPicker(menu, mv.kinopoiskId, data.rooms, () => closeCardMenu());
-    };
-    bindMovieCardMenu(card);
-
-    bindMovieCardInfoOpen(card, mv);
-
-    container.append(card);
+    const mv = Object.assign(it.movie, { myScore: it.myScore });
+    const menu = renderCardMenu([
+      {
+        label: "Добавить в комнату",
+        onClick: async menu => {
+          menu.innerHTML = '<p class="muted" style="padding:.5em .8em">Загрузка…</p>';
+          const data = await act(() => api("/rooms"));
+          if (!data || menu.hidden) return;
+          menu.innerHTML = "";
+          renderRoomPicker(menu, mv.kinopoiskId, data.rooms, () => closeCardMenu());
+        },
+      },
+    ]);
+    container.append(renderMovieTile(mv, { menu, rating: { kinopoiskId: mv.kinopoiskId, score: mv.myScore } }));
   }
 }
 
@@ -2311,93 +2259,35 @@ async function showMyList() {
     это showMyList (перечитать список), на превью #/profile — showProfile
     (иначе после удаления в превью карточка исчезла бы, а «Показать все»
     осталась бы в устаревшем состоянии, посчитанном по старому total).
-    Разметка — та же, что у карточки очереди (renderMovieCard): «Смотреть» —
-    в .movie-card-footer (тот же приём, что и у очереди — использует
-    освободившееся под высокой обложкой место), а «Добавить в комнату»/
-    «Убрать из списка» — оба в «…»-меню в углу (title-actions), а не
-    отдельными кнопками рядом. «Добавить в комнату» ведёт себя как в
-    renderAddToMenu: клик подгружает комнаты и подменяет содержимое ТОГО ЖЕ
-    .menu на renderRoomPicker (список, клик по названию сразу добавляет) —
-    и по тем же причинам, что и там, при повторном открытии меню содержимое
-    сбрасывается к исходным двум пунктам (тот же приём оборачивания onclick,
-    что бросается в глаза при чтении renderAddToMenu — иначе повторное
-    открытие показывало бы застрявший список комнат). */
+    Тонкая обёртка вокруг renderMovieTile — своё тут только меню («Добавить
+    в комнату»/«Убрать из списка»). avgScore/ratingCount/myScore уже внутри
+    it.movie — personalList на бэке сама их подбирает (см. server.js), в
+    отличие от watchedList мёржить тут ничего не нужно. */
 function renderMyListInto(container, items, onChange) {
   container.textContent = "";
   for (const it of items) {
     const mv = it.movie;
-    const card = el("div", "movie-card");
-    const year = mv.year ? ` (${mv.year})` : "";
-    const menuInitialHtml = `
-      <button class="menu-item" data-act="addRoom">Добавить в комнату</button>
-      <button class="menu-item danger" data-act="remove">Убрать из списка</button>`;
-    card.innerHTML = `
-      <div class="title-row">
-        <div class="movie-card-head">
-          ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
-          <div class="movie-info">
-            <div class="movie-info-top">
-              <div class="title">${esc(mv.title)}${esc(year)}</div>
-              <div class="chip-row">${movieChipsHtml(mv)}</div>
-            </div>
-          </div>
-        </div>
-        <div class="title-actions">
-          <button class="icon-btn xs" data-act="watch" type="button" title="Смотреть" aria-label="Смотреть">${PLAY_ICON}</button>
-          <div class="menu-wrap">
-            <button class="icon-btn xs" data-act="cardMenuBtn" type="button" title="Действия с фильмом" aria-label="Действия с фильмом" aria-haspopup="true" aria-expanded="false">
-              <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
-            </button>
-            <div class="menu" data-act="cardMenu" hidden>${menuInitialHtml}</div>
-          </div>
-        </div>
-      </div>`;
-
-    card.querySelector('[data-act="watch"]').onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
-
-    // «Добавить в комнату» переписывает menu.innerHTML прямо в обработчике
-    // клика (сначала на «Загрузка…», потом на сам пикер) — старая кнопка,
-    // на которую кликнули, из-за этого отсоединяется от DOM ДО того, как
-    // клик долетит по всплытию до общего document-обработчика «клик снаружи
-    // закрывает меню» (bindMovieCardMenu выше по файлу), и menu.contains(e.target)
-    // для уже отсоединённой кнопки возвращает false — меню закрывалось бы
-    // само на себе тем же кликом. stopPropagation на menu-wrap (тот же
-    // приём, что и в renderAddToMenu) не даёт клику вообще доехать до
-    // document — общий обработчик такие клики просто не видит.
-    card.querySelector('.menu-wrap').onclick = e => e.stopPropagation();
-
-    const menu = card.querySelector('[data-act="cardMenu"]');
-    function bindMenuItems() {
-      menu.querySelector('[data-act="addRoom"]').onclick = async () => {
-        menu.innerHTML = '<p class="muted" style="padding:.5em .8em">Загрузка…</p>';
-        const data = await act(() => api("/rooms"));
-        if (!data || menu.hidden) return;   // закрыли меню, пока список комнат летел
-        menu.innerHTML = "";
-        renderRoomPicker(menu, mv.kinopoiskId, data.rooms);
-      };
-      menu.querySelector('[data-act="remove"]').onclick = () => act(async () => {
-        closeCardMenu();
-        await api(`/my-list/${mv.kinopoiskId}`, { method: "DELETE" });
-        await onChange();
-      }, "Убрано из списка");
-    }
-    bindMenuItems();
-
-    bindMovieCardMenu(card);
-    const menuBtn = card.querySelector('[data-act="cardMenuBtn"]');
-    const toggle = menuBtn.onclick;
-    menuBtn.onclick = e => {
-      const wasHidden = menu.hidden;
-      toggle(e);
-      if (wasHidden && !menu.hidden) {
-        menu.innerHTML = menuInitialHtml;
-        bindMenuItems();
-      }
-    };
-
-    bindMovieCardInfoOpen(card, mv);
-
-    container.append(card);
+    const menu = renderCardMenu([
+      {
+        label: "Добавить в комнату",
+        onClick: async menu => {
+          menu.innerHTML = '<p class="muted" style="padding:.5em .8em">Загрузка…</p>';
+          const data = await act(() => api("/rooms"));
+          if (!data || menu.hidden) return;   // закрыли меню, пока список комнат летел
+          menu.innerHTML = "";
+          renderRoomPicker(menu, mv.kinopoiskId, data.rooms);
+        },
+      },
+      {
+        label: "Убрать из списка", danger: true,
+        onClick: () => act(async () => {
+          closeCardMenu();
+          await api(`/my-list/${mv.kinopoiskId}`, { method: "DELETE" });
+          await onChange();
+        }, "Убрано из списка"),
+      },
+    ]);
+    container.append(renderMovieTile(mv, { menu, rating: { kinopoiskId: mv.kinopoiskId, score: mv.myScore } }));
   }
 }
 

@@ -161,14 +161,14 @@
     <a class="btn tonal sm" id="profileWatchedMoreBtn" href="#/watched" hidden>Показать все</a>
   </div>
   <p class="muted" id="profileWatchedEmpty">Пока ничего не отмечено просмотренным.</p>
-  <div class="queue-grid" id="profileWatchedList"></div>
+  <div class="movie-grid" id="profileWatchedList"></div>
 
   <div class="title-row">
     <h2>Мой список</h2>
     <a class="btn tonal sm" id="profileMyListMoreBtn" href="#/my-list" hidden>Показать все</a>
   </div>
   <p class="muted" id="profileMyListEmpty">Список пуст — добавляйте фильмы через поиск в шапке.</p>
-  <div class="queue-grid" id="profileMyListItems"></div>
+  <div class="movie-grid" id="profileMyListItems"></div>
 </section>
 
 <!-- ===================== ОДНА КОМНАТА ===================== -->
@@ -219,11 +219,11 @@
     <button class="draw-start-btn" id="drawLinkBtn">Выбрать случайный</button>
   </div>
   <p class="muted" id="moviesEmpty">Фильмов пока нет — добавьте через + выше.</p>
-  <div class="queue-grid" id="movieList"></div>
+  <div class="movie-grid" id="movieList"></div>
 
   <h2>История просмотров</h2>
   <p class="muted" id="movieHistoryEmpty">В этой комнате ещё ничего не смотрели.</p>
-  <div id="movieHistoryList"></div>
+  <div class="movie-grid" id="movieHistoryList"></div>
 </section>
 
 <!-- ===================== МОДАЛКА: УЧАСТНИКИ ===================== -->
@@ -290,6 +290,26 @@
   </div>
 </div>
 
+<!-- ===================== МОДАЛКА: ОЦЕНКА ===================== -->
+<!-- Открывается кружком личной оценки на компактной карточке фильма
+     (renderRatingBadge/openRateModal в app.js) — та же шкала из 10 звёзд,
+     что и в модалке «Фильм», просто в отдельном маленьком окошке: на самой
+     карточке для шкалы физически нет места. -->
+<div class="modal-backdrop hidden" id="rateModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="rateModalTitle">
+    <div class="modal-head">
+      <h2 id="rateModalTitle">Оценка</h2>
+      <button class="icon-btn" id="rateModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div id="rateModalBody"></div>
+    <div class="row" id="rateModalActions">
+      <button class="btn filled" id="rateModalDoneBtn" type="button">Готово</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===================== РОЗЫГРЫШ ===================== -->
 <section id="drawView" hidden>
   <a class="backlink" id="drawBack" href="#/">← Комната</a>
@@ -340,7 +360,7 @@
   <a class="backlink" href="#/">← Все комнаты</a>
   <h1>Что мы смотрели</h1>
   <p class="muted" id="watchedEmpty">Пока ничего не отмечено просмотренным.</p>
-  <div class="queue-grid" id="watchedList"></div>
+  <div class="movie-grid" id="watchedList"></div>
 </section>
 
 <!-- ===================== МОЙ СПИСОК (без привязки к комнате) ===================== -->
@@ -348,7 +368,7 @@
   <a class="backlink" href="#/">← Все комнаты</a>
   <h1>Мой список</h1>
   <p class="muted" id="myListEmpty">Список пуст — добавляйте фильмы через поиск в шапке.</p>
-  <div class="queue-grid" id="myListItems"></div>
+  <div class="movie-grid" id="myListItems"></div>
 </section>
 
 <!-- ===================== ПРИГЛАШЕНИЕ ===================== -->
