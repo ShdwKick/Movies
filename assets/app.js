@@ -1555,7 +1555,7 @@ function queuedCandidatesFromRoom() {
 }
 
 /** Живое превью выбранного метода в области #drawStage: тот же самый
-    компонент, что потом анимируется по «Выбрать случайный», просто в
+    компонент, что потом анимируется по «Крутить», просто в
     состоянии покоя (renderReel/renderWheelSvg умеют рисовать и без
     прокрутки) — рендерится сразу при переключении .mini-seg, без похода на
     сервер. Не трогает стадию, пока идёт сама прокрутка (drawState.spinning),
@@ -1577,7 +1577,7 @@ function renderDrawSetup() {
   hideDrawResult();
   const btn = $("drawStartBtn");
   btn.disabled = false;
-  btn.textContent = "Выбрать случайный";
+  btn.textContent = "Крутить";
   closeDrawSettingsPanel();
   updateMethodButtons();
 }
@@ -1586,7 +1586,7 @@ function renderDrawSetup() {
     вызывается и при смене метода, и в начале новой прокрутки, чтобы
     под новым превью/новой прокруткой не оставались кнопки от ПРЕДЫДУЩЕГО
     результата (см. showDrawResult — сама панель, наоборот, никогда не
-    скрывает #drawSetup, переключатель метода и «Выбрать случайный» теперь
+    скрывает #drawSetup, переключатель метода и «Крутить» теперь
     всегда на экране, план задачи «кнопки не должны пропадать»). */
 function hideDrawResult() {
   const result = $("drawResult");
@@ -1615,9 +1615,9 @@ $("drawStartBtn").onclick = async () => {
   $("drawSettingsBtn").disabled = true;
   hideDrawResult();   // от ПРЕДЫДУЩЕГО прогона — иначе его кнопки видны поверх новой прокрутки
   const data = await act(() => api(`/rooms/${drawState.roomId}/draw`, { method: "POST", body: { method: drawState.method } }));
-  if (!data) { drawState.spinning = false; btn.disabled = false; btn.textContent = "Выбрать случайный"; $("drawMethodRow").classList.remove("disabled"); $("drawSettingsBtn").disabled = false; return; }
+  if (!data) { drawState.spinning = false; btn.disabled = false; btn.textContent = "Крутить"; $("drawMethodRow").classList.remove("disabled"); $("drawSettingsBtn").disabled = false; return; }
 
-  // Переключатель метода и «Выбрать случайный» (#drawSetup) остаются на
+  // Переключатель метода и «Крутить» (#drawSetup) остаются на
   // экране ВСЕГДА — и во время прокрутки, и на финальном экране результата
   // (см. showDrawResult, который теперь #drawSetup не трогает вовсе — план
   // задачи «кнопки не должны пропадать»). #drawStage перерисовывается с нуля
@@ -1632,7 +1632,7 @@ $("drawStartBtn").onclick = async () => {
 
   drawState.spinning = false;
   btn.disabled = false;
-  btn.textContent = "Выбрать случайный";
+  btn.textContent = "Крутить";
   $("drawMethodRow").classList.remove("disabled");
   $("drawSettingsBtn").disabled = false;
   showDrawResult(data.candidates, data.resultKinopoiskId);
@@ -2072,10 +2072,10 @@ async function animateElimination(container, candidates, rounds, resultId) {
 function showDrawResult(candidates, resultId) {
   const mv = candidates.find(c => c.kinopoiskId === resultId) || {};
   const roomId = drawState.roomId;
-  // Переключатель метода и «Выбрать случайный» (#drawSetup) остаются на
+  // Переключатель метода и «Крутить» (#drawSetup) остаются на
   // экране и здесь, на финальном экране результата — их больше НЕ прячем
   // (см. план задачи «кнопки не должны пропадать»): чтобы крутить ещё раз,
-  // достаточно снова нажать «Выбрать случайный», отдельная кнопка «Крутить
+  // достаточно снова нажать «Крутить», отдельная кнопка «Крутить
   // ещё раз» стала избыточной и убрана. #drawStage (колесо/карусель) уже
   // остановлено на результате анимацией выше (см. план задачи «кнопки под
   // колесом/каруселью»), кнопки результата ложатся под ним.

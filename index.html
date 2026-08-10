@@ -96,7 +96,9 @@
   <h2>Есть код приглашения?</h2>
   <div class="bar">
     <input type="text" id="joinCodeInput" placeholder="Код комнаты" maxlength="16">
-    <button class="btn tonal" id="joinCodeBtn">Найти</button>
+    <button class="icon-btn tonal" id="joinCodeBtn" title="Найти" aria-label="Найти">
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    </button>
   </div>
 
   <!-- Поиск фильмов прямо на главной, над витриной — тот же принцип, что в
@@ -213,8 +215,8 @@
   </div>
   <input type="file" id="importCsvInput" class="hidden" accept=".csv,text/csv">
 
-  <div class="row" id="drawLinkRow" hidden>
-    <button class="btn filled" id="drawLinkBtn">Крутить</button>
+  <div class="row draw-start-row" id="drawLinkRow" hidden>
+    <button class="draw-start-btn" id="drawLinkBtn">Выбрать случайный</button>
   </div>
   <p class="muted" id="moviesEmpty">Фильмов пока нет — добавьте через + выше.</p>
   <div class="queue-grid" id="movieList"></div>
@@ -319,7 +321,7 @@
       </div>
     </div>
     <div class="row draw-start-row">
-      <button class="draw-start-btn" id="drawStartBtn" type="button">Выбрать случайный</button>
+      <button class="draw-start-btn" id="drawStartBtn" type="button">Крутить</button>
     </div>
   </div>
 

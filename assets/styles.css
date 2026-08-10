@@ -143,13 +143,15 @@ a{color:var(--md-sys-color-primary)}
    панель под полем. */
 .header-search{
   position:relative;display:flex;align-items:center;gap:.4rem;
-  width:11rem;max-width:38vw;flex:none;
+  width:18rem;max-width:50vw;flex:none;
   padding:0 .6rem;border-radius:999px;
   border:1px solid var(--md-sys-color-outline-variant);
   background:var(--md-sys-color-surface-container-lowest);
   transition:width .2s var(--ease-std),border-color .15s;
 }
-.header-search:focus-within{width:22rem;max-width:60vw;border-color:var(--md-sys-color-primary)}
+/* Ширина в покое и по фокусу — обе подняты (были 11rem/22rem) примерно в
+   1.6 раза, попросили сделать поле в шапке заметно шире. */
+.header-search:focus-within{width:35rem;max-width:75vw;border-color:var(--md-sys-color-primary)}
 .header-search-icon{flex:none;color:var(--md-sys-color-on-surface-variant)}
 .header-search input[type="text"]{flex:1;min-width:0;border:none;background:none;padding:9px 0;font-size:14px}
 /* Узкий экран: лого+3 иконки-44px+растущее поле в один ряд не помещаются
@@ -274,6 +276,13 @@ select{
 [data-theme="dark"] select{color-scheme:dark}
 .row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:1rem}
 .bar{display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-top:1rem}
+/* input[type=text] по умолчанию width:100% — внутри флекс-ряда это читается
+   как "хочу всю строку целиком", и с flex-wrap:wrap сосед (кнопка) тут же
+   уезжает на новую строку, даже когда места объективно достаточно (это
+   всплыло у "Название комнаты"/"Код комнаты" после того, как flex-wrap:wrap
+   добавили ради экрана розыгрыша на телефоне, см. .draw-method-row). Тут
+   инпут наоборot делится строкой с кнопкой, а не занимает её целиком. */
+.bar input[type="text"]{flex:1;width:auto;min-width:0}
 
 /* ===================== ЭКРАН «НУЖЕН ВХОД» =====================
    Показывается только когда увести на auth не получилось (см.
