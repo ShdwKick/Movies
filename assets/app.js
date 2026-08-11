@@ -1331,6 +1331,142 @@ bindModal("movieInfoModalBackdrop", null, "movieInfoModalClose");
 bindModal("rateModalBackdrop", null, "rateModalClose");
 $("rateModalDoneBtn").onclick = () => closeModal("rateModalBackdrop");
 
+// ───────────────────────── импорт из IMDb (страница «Мои фильмы») ─────────────────────────
+// Тело — сырой текст CSV-файла, тот же приём, что и у importCsvInput (импорт
+// комнаты) выше: сервер ждёт text/csv, не JSON, поэтому мимо общего api().
+async function postCsv(path, text) {
+  const res = await auth.fetch("/api" + path, { method: "POST", headers: { "Content-Type": "text/csv" }, body: text });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(res.status, data);
+  return data;
+}
+
+bindModal("importModalBackdrop", null, "importModalClose");
+$("importBtn").onclick = () => {
+  $("importImdbRatingsInput").value = "";
+  $("importImdbWatchlistInput").value = "";
+  $("importImdbResult").textContent = "";
+  $("importKinopoiskUrlInput").value = "";
+  $("importKinopoiskResult").textContent = "";
+  refreshKinopoiskExtensionStatus();
+  openModal("importModalBackdrop");
+};
+
+/** Оба файла необязательны — можно загрузить только оценки, только
+    watchlist, или оба разом. queued в отчёте — фильмы, для которых не
+    хватило сегодняшней доли квоты poiskkino.dev: они не потеряны, лежат в
+    очереди и докатятся сами в следующие дни (см. drainImportQueue на
+    сервере), но сразу в списках их ещё не будет — стоит сказать об этом
+    явно, а не оставлять полное число «импортировано» подвешенным в воздухе. */
+$("importImdbSubmitBtn").onclick = async () => {
+  const ratingsFile = $("importImdbRatingsInput").files[0];
+  const watchlistFile = $("importImdbWatchlistInput").files[0];
+  if (!ratingsFile && !watchlistFile) { snack("Выберите хотя бы один файл"); return; }
+
+  const btn = $("importImdbSubmitBtn");
+  btn.disabled = true;
+  $("importImdbResult").textContent = "";
+  const describe = (label, r) => {
+    const parts = [`импортировано: ${r.imported}`];
+    if (r.queued) parts.push(`в очереди на докачку: ${r.queued}`);
+    if (r.skipped) parts.push(`пропущено: ${r.skipped}`);
+    return `${label} — ${parts.join(", ")}`;
+  };
+  const lines = [];
+  if (ratingsFile) {
+    const text = await ratingsFile.text();
+    const r = await act(() => postCsv("/import/imdb/ratings", text));
+    if (r) lines.push(describe("Оценки", r));
+  }
+  if (watchlistFile) {
+    const text = await watchlistFile.text();
+    const r = await act(() => postCsv("/import/imdb/watchlist", text));
+    if (r) lines.push(describe("Буду смотреть", r));
+  }
+  btn.disabled = false;
+
+  $("importImdbResult").innerHTML = lines.length
+    ? lines.map(l => `<p>${esc(l)}</p>`).join("")
+    : '<p class="muted">Не удалось импортировать ни один из файлов.</p>';
+  await showProfile(); // обновить списки под модалкой сразу же
+};
+
+// ───────────────────────── импорт с Кинопоиска (расширение) ─────────────────────────
+// Прямой запрос с сервера к kinopoisk.ru блокирует антибот Яндекса по IP
+// (проверено на практике — редирект на showcaptcha уже на голой главной),
+// из JS этой же страницы — CORS (тоже проверено: "blocked by CORS policy").
+// Решение — браузерное расширение (BurningHouse/KinopoiskImport), код
+// которого выполняется в браузере пользователя: обычный IP снимает блок
+// антибота, привилегированный контекст расширения снимает CORS. Общаемся с
+// ним через chrome.runtime.sendMessage(EXTENSION_ID, ...) — работает только
+// со страниц, перечисленных в его manifest.json → externally_connectable.
+//
+// ID ниже — от dev-ключа расширения (см. KinopoiskImport/README.md), стабилен
+// при локальной загрузке через "Загрузить распакованное расширение", но
+// Chrome Web Store при публикации назначит СВОЙ ID — тогда эту константу
+// нужно будет обновить.
+const KINOPOISK_EXTENSION_ID = "igmlehhgfmmkhnlbjidmpagbkedbdknp";
+
+/** null, если расширения нет вовсе (chrome.runtime недоступен на странице —
+    так бывает, если НИ ОДНО установленное расширение не объявило эту
+    страницу в своём externally_connectable) или оно не ответило вовремя
+    (chrome.runtime.lastError — например, расширение отключено). */
+function extensionSendMessage(message) {
+  return new Promise(resolve => {
+    if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.sendMessage) { resolve(null); return; }
+    try {
+      chrome.runtime.sendMessage(KINOPOISK_EXTENSION_ID, message, response => {
+        if (chrome.runtime.lastError || !response) { resolve(null); return; }
+        resolve(response);
+      });
+    } catch { resolve(null); }
+  });
+}
+
+async function refreshKinopoiskExtensionStatus() {
+  const pong = await extensionSendMessage({ type: "ping" });
+  $("importKinopoiskNotInstalled").hidden = !!pong;
+  $("importKinopoiskForm").hidden = !pong;
+}
+
+$("importKinopoiskSubmitBtn").onclick = async () => {
+  const input = $("importKinopoiskUrlInput").value.trim();
+  if (!input) { snack("Введите ссылку на профиль или username"); return; }
+
+  const btn = $("importKinopoiskSubmitBtn");
+  btn.disabled = true;
+  $("importKinopoiskResult").textContent = "";
+
+  const response = await extensionSendMessage({ type: "importKinopoisk", username: input });
+  if (!response) {
+    snack("Не удалось связаться с расширением — обновите страницу и проверьте, что оно включено");
+    btn.disabled = false;
+    return;
+  }
+  if (!response.ok) {
+    const err = response.error || {};
+    const message = err.privateOrEmpty ? "Профиль закрыт либо в нём ничего нет"
+      : err.notFound ? "Профиль не найден"
+      : err.message || "Не удалось получить данные с Кинопоиска";
+    snack(message);
+    btn.disabled = false;
+    return;
+  }
+
+  const report = await act(() => api("/import/kinopoisk", {
+    method: "POST",
+    body: { rated: response.data.rated, watchlist: response.data.watchlist },
+  }));
+  btn.disabled = false;
+  if (!report) return;
+
+  $("importKinopoiskResult").innerHTML = [
+    `<p>Оценки — импортировано: ${report.ratedImported}</p>`,
+    `<p>Буду смотреть — добавлено: ${report.watchlistAdded}${report.watchlistSkipped ? `, пропущено (уже оценено/просмотрено/в списке): ${report.watchlistSkipped}` : ""}</p>`,
+  ].join("");
+  await showProfile();
+};
+
 // ───────────────────────── глобальный поиск (шапка, любая комната) ─────────────────────────
 // Больше не модалка — тот же принцип, что у поиска на главной
 // (runHomeSearch/renderHomeSearchResults выше): живой поиск по мере ввода

@@ -712,6 +712,28 @@ ul.plain li:last-child{border-bottom:0}
    drawStartBtn.onclick в app.js) — тот же приём, что и .mini-seg.disabled
    выше, просто через нативный :disabled, а не отдельный класс. */
 #drawSettingsBtn:disabled{opacity:.5;cursor:default;pointer-events:none}
+
+/* Модалка «Импорт из IMDb» — поле-обёртка label+file input, ряд полей друг
+   под другом (тот же принцип, что у .draw-settings-field, только с
+   собственным отступом сверху — тут нет общего .draw-settings-panel с
+   gap, поля идут прямо в теле модалки). */
+.import-field{
+  display:block;margin-top:1rem;
+  font-size:13px;font-weight:600;color:var(--md-sys-color-on-surface-variant);
+}
+.import-field input[type="file"]{display:block;margin-top:.4rem;font-size:13px;width:100%;color:var(--md-sys-color-on-surface-variant)}
+/* Голая браузерная кнопка «Выберите файл» — под общий стиль .btn.tonal.sm,
+   имя файла/«Файл не выбран» справа остаётся системным текстом, его
+   ::file-selector-button не затрагивает. */
+.import-field input[type="file"]::file-selector-button{
+  height:32px;padding:0 14px;margin-right:.7rem;border:0;border-radius:var(--md-sys-shape-corner-full);
+  font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;
+  background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);
+  transition:background .15s;
+}
+.import-field input[type="file"]::file-selector-button:hover{background:color-mix(in srgb,var(--md-sys-color-secondary-container) 85%,var(--md-sys-color-on-secondary-container))}
+#importImdbResult{margin-top:1rem;font-size:14px}
+#importImdbResult p{margin:.3rem 0}
 /* Масштаб — только для ПК: на телефоне колесо/карусель и так упираются в
    ширину экрана (см. min(...,92vw)/min(...,94vw) у .wheel-wrap/.reel-viewport),
    увеличивать там особо некуда, а лишний контрол в и без того тесной панели

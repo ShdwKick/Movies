@@ -52,7 +52,7 @@
     <div class="spacer"></div>
     <button class="icon-btn" id="themeBtn" title="Тема" aria-label="Тема"></button>
     <button class="icon-btn" id="serviceProfileBtn" hidden title="Мои фильмы" aria-label="Мои фильмы">
-      <svg class="icon" viewBox="0 0 24 24"><path d="M6 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v16l-6-4-6 4V4z"/></svg>
+      <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.2"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
     </button>
     <div class="menu-wrap" id="accountMenuWrap" hidden>
       <button class="icon-btn" id="accountBtn" title="Аккаунт" aria-label="Аккаунт" aria-haspopup="true" aria-expanded="false">
@@ -154,7 +154,12 @@
      кнопке или напрямую по ссылке. -->
 <section id="profileView" hidden>
   <a class="backlink" href="#/">← Все комнаты</a>
-  <h1>Мои фильмы</h1>
+  <div class="title-row">
+    <h1>Мои фильмы</h1>
+    <div class="title-actions">
+      <button class="btn tonal sm" id="importBtn" type="button">Импорт</button>
+    </div>
+  </div>
 
   <div class="title-row">
     <h2>Что мы смотрели</h2>
@@ -306,6 +311,67 @@
     <div id="rateModalBody"></div>
     <div class="row" id="rateModalActions">
       <button class="btn filled" id="rateModalDoneBtn" type="button">Готово</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== МОДАЛКА: ИМПОРТ ===================== -->
+<div class="modal-backdrop hidden" id="importModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
+    <div class="modal-head">
+      <h2 id="importModalTitle">Импорт</h2>
+      <button class="icon-btn" id="importModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+
+    <!-- Официальный экспорт IMDb — на странице своих оценок/watchlist на
+         imdb.com есть кнопка «Export», она скачивает CSV. Загружаем его
+         сюда как есть, без парсинга на фронте — сырой текст файла уходит
+         на сервер (тот же приём, что и у CSV-импорта комнаты, см.
+         importCsvInput в app.js). Два файла — потому что у IMDb это две
+         разные страницы с двумя разными экспортами (оценки отдельно,
+         watchlist отдельно), загружать можно один, оба или ни одного
+         (кнопка сама решает, что реально выбрано). -->
+    <h3>IMDb</h3>
+    <p class="muted">На IMDb, на странице своих оценок и на странице watchlist есть кнопка «Export» — она скачивает CSV-файл. Загрузите его (или оба) сюда.</p>
+    <label class="import-field">
+      Файл с оценками (Your ratings)
+      <input type="file" id="importImdbRatingsInput" accept=".csv,text/csv">
+    </label>
+    <label class="import-field">
+      Файл со списком «Буду смотреть» (Your watchlist)
+      <input type="file" id="importImdbWatchlistInput" accept=".csv,text/csv">
+    </label>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn filled" id="importImdbSubmitBtn" type="button">Импортировать</button>
+    </div>
+    <div id="importImdbResult"></div>
+
+    <div class="movie-info-sep"></div>
+
+    <!-- Прямой запрос к Кинопоиску с нашего сервера блокирует антибот
+         Яндекса (по IP), а из JS на нашей странице — CORS. Решение —
+         браузерное расширение (см. BurningHouse/KinopoiskImport):
+         выполняется в браузере пользователя, обходит обе проблемы.
+         chrome.runtime.sendMessage к его ID (см. KINOPOISK_EXTENSION_ID в
+         app.js) — если расширение не установлено, вместо формы показываем
+         объяснение, ссылку/статус проверяем при каждом открытии модалки
+         (см. refreshKinopoiskExtensionStatus). -->
+    <h3>Кинопоиск</h3>
+    <p class="muted" id="importKinopoiskNotInstalled">
+      Нужно расширение браузера (Кинопоиск блокирует прямые запросы с серверов) — установите
+      «Что смотрим — импорт с Кинопоиска» и обновите эту страницу.
+    </p>
+    <div id="importKinopoiskForm" hidden>
+      <label class="import-field">
+        Ссылка на профиль или username
+        <input type="text" id="importKinopoiskUrlInput" placeholder="https://www.kinopoisk.ru/user/username/">
+      </label>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn filled" id="importKinopoiskSubmitBtn" type="button">Импортировать</button>
+      </div>
+      <div id="importKinopoiskResult"></div>
     </div>
   </div>
 </div>
