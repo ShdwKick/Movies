@@ -196,6 +196,7 @@ async function route() {
   if (draw) return showDraw(draw[1]);
   if (room) return openRoom(room[1]);
   if (hash === "#/watched") return showWatched();
+  if (hash === "#/my-list/draw") return showMyListDraw();
   if (hash === "#/my-list") return showMyList();
   if (hash === "#/profile") return showProfile();
   return showRooms();
@@ -1705,18 +1706,45 @@ async function showDraw(roomId) {
   }
   document.title = `Розыгрыш — ${state.room.room.title}`;
   $("drawBack").href = "#/room/" + roomId;
+  $("drawBack").textContent = "← Комната";
   $("drawTitle").textContent = `Розыгрыш: ${state.room.room.title}`;
-  drawState = { roomId, method: "weighted_random" };
+  drawState = { source: "room", roomId, method: "weighted_random" };
   renderDrawSetup();
 }
 
-/** Кандидаты в том же виде, в каком их присылает POST /rooms/:id/draw
-    ({kinopoiskId, weight, title, year, posterUrl}) — собраны из уже
-    загруженной очереди комнаты (state.room.movies, только status==="queued",
-    см. renderMovies). Используются ТОЛЬКО для живого превью метода до
-    запуска розыгрыша — реальный исход всегда решает сервер, лишний запрос
-    сюда не нужен (см. план задачи 3 и шапку файла про правило сервера). */
-function queuedCandidatesFromRoom() {
+/** Розыгрыш по личному списку — тот же экран #/room/:id/draw использует и
+    комната, и это (drawState.source различает их, см. previewCandidates/
+    drawStartBtn.onclick/showDrawResult ниже). Список перечитываем заново
+    при каждом заходе (а не кэшируем в state) — тут нет своего экрана,
+    который бы держал его свежим между заходами, как renderMovies у
+    комнаты. */
+async function showMyListDraw() {
+  showOnly("drawView");
+  const data = await act(() => api("/my-list"));
+  if (!data) { location.hash = "#/my-list"; return; }
+  state.myList = data.movies;
+  document.title = "Розыгрыш — Мой список";
+  $("drawBack").href = "#/my-list";
+  $("drawBack").textContent = "← Мой список";
+  $("drawTitle").textContent = "Розыгрыш: Мой список";
+  drawState = { source: "myList", method: "weighted_random" };
+  renderDrawSetup();
+}
+
+/** Кандидаты в том же виде, в каком их присылает POST .../draw ({kinopoiskId,
+    weight, title, year, posterUrl}) — из уже загруженных данных источника
+    (очередь комнаты ИЛИ личный список, см. drawState.source), без похода на
+    сервер. Используются ТОЛЬКО для живого превью метода до запуска
+    розыгрыша — реальный исход всегда решает сервер (см. план задачи 3 и
+    шапку файла про правило сервера). */
+function previewCandidates() {
+  if (!drawState) return [];
+  if (drawState.source === "myList") {
+    return (state.myList || []).map(it => ({
+      kinopoiskId: it.movie.kinopoiskId, weight: 1,
+      title: it.movie.title, year: it.movie.year, posterUrl: it.movie.posterUrl,
+    }));
+  }
   if (!state.room) return [];
   return state.room.movies
     .filter(rm => rm.status === "queued")
@@ -1736,7 +1764,7 @@ function renderMethodPreview() {
   if (!drawState || drawState.spinning) return;
   const stage = $("drawStage");
   stage.innerHTML = "";
-  const candidates = queuedCandidatesFromRoom();
+  const candidates = previewCandidates();
   if (!candidates.length) return;
   if (drawState.method === "weighted_random") renderReel(stage, candidates, 0, false);
   else renderWheelSvg(stage, candidates);   // «Колесо» и «На выбывание» превьюшатся одним и тем же колесом в покое
@@ -1787,7 +1815,8 @@ $("drawStartBtn").onclick = async () => {
   closeDrawSettingsPanel();
   $("drawSettingsBtn").disabled = true;
   hideDrawResult();   // от ПРЕДЫДУЩЕГО прогона — иначе его кнопки видны поверх новой прокрутки
-  const data = await act(() => api(`/rooms/${drawState.roomId}/draw`, { method: "POST", body: { method: drawState.method } }));
+  const drawUrl = drawState.source === "myList" ? "/my-list/draw" : `/rooms/${drawState.roomId}/draw`;
+  const data = await act(() => api(drawUrl, { method: "POST", body: { method: drawState.method } }));
   if (!data) { drawState.spinning = false; btn.disabled = false; btn.textContent = "Крутить"; $("drawMethodRow").classList.remove("disabled"); $("drawSettingsBtn").disabled = false; return; }
 
   // Переключатель метода и «Крутить» (#drawSetup) остаются на
@@ -2249,6 +2278,7 @@ async function animateElimination(container, candidates, rounds, resultId) {
 function showDrawResult(candidates, resultId) {
   const mv = candidates.find(c => c.kinopoiskId === resultId) || {};
   const roomId = drawState.roomId;
+  const isMyList = drawState.source === "myList";
   // Переключатель метода и «Крутить» (#drawSetup) остаются на
   // экране и здесь, на финальном экране результата — их больше НЕ прячем
   // (см. план задачи «кнопки не должны пропадать»): чтобы крутить ещё раз,
@@ -2277,8 +2307,13 @@ function showDrawResult(candidates, resultId) {
     </div>`;
   $("drawKpBtn").onclick = () => window.open(kinopoiskCxUrl(resultId), "_blank", "noopener");
   $("drawWatchedBtn").onclick = () => act(async () => {
-    await api(`/rooms/${roomId}/movies/${resultId}/watched`, { method: "POST" });
-    location.hash = "#/room/" + roomId;
+    if (isMyList) {
+      await api(`/movies/${resultId}/watched`, { method: "POST" });
+      location.hash = "#/my-list";
+    } else {
+      await api(`/rooms/${roomId}/movies/${resultId}/watched`, { method: "POST" });
+      location.hash = "#/room/" + roomId;
+    }
   }, "Отмечено просмотренным");
 }
 
@@ -2389,7 +2424,11 @@ async function showMyList() {
   if (!data) return;
   $("myListEmpty").hidden = data.movies.length > 0;
   renderMyListInto($("myListItems"), data.movies, showMyList);
+  // Тот же порог, что и у «Крутить» в комнате (renderMovies) — розыгрыш
+  // одного фильма ничего не решает, хоть сервер такое и не запрещает.
+  $("myListDrawRow").hidden = data.movies.length < 2;
 }
+$("myListDrawBtn").onclick = () => { location.hash = "#/my-list/draw"; };
 
 /** onChange зовётся после «Убрать из списка» — на полной странице #/my-list
     это showMyList (перечитать список), на превью #/profile — showProfile

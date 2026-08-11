@@ -382,6 +382,15 @@ const stmt = {
            mv.title AS title, mv.year AS year, mv.poster_url AS poster_url
       FROM room_movies rm JOIN movies mv ON mv.kinopoisk_id = rm.kinopoisk_id
      WHERE rm.room_id = ? AND rm.status = 'queued'`),
+  // Кандидаты розыгрыша по личному списку (POST /my-list/draw) — тот же
+  // принцип, что у queuedMovies выше, но без веса: у personal_list его
+  // просто нет как понятия (весами там пока никто не просил управлять),
+  // так что все кандидаты равновероятны — вес 1 подставляет сам JS.
+  personalListMovies: db.prepare(`
+    SELECT mv.kinopoisk_id AS kinopoisk_id,
+           mv.title AS title, mv.year AS year, mv.poster_url AS poster_url
+      FROM personal_list pl JOIN movies mv ON mv.kinopoisk_id = pl.kinopoisk_id
+     WHERE pl.user_id = ?`),
   insertDraw: db.prepare(`
     INSERT INTO selection_events (id, room_id, method, candidates, result_kinopoisk_id, created_by, created_at)
     VALUES (?,?,?,?,?,?,?)`),
@@ -1314,6 +1323,23 @@ async function api(req, res, seg, user, query) {
     return json(res, 405, { error: "method not allowed" });
   }
 
+  // ── глобальная отметка «просмотрено» вне комнаты ─────────────
+  // Нужна розыгрышу по личному списку (см. POST /my-list/draw ниже) — там
+  // нет никакой комнаты, через которую обычно идёт отметка просмотренного
+  // (POST /rooms/:id/movies/:kpId/watched). Эффект тот же — movie_marks
+  // глобально, плюс убираем фильм из личного списка: он был там как «хочу
+  // посмотреть», после этого действия это уже не так.
+  if (seg.length === 4 && seg[1] === "movies" && seg[3] === "watched") {
+    if (m !== "POST") return json(res, 405, { error: "method not allowed" });
+    const kpId = parseInt(seg[2], 10);
+    if (!Number.isFinite(kpId)) return json(res, 400, { error: "bad kinopoiskId" });
+    if (!stmt.movieByKpId.get(kpId)) return json(res, 404, { error: "not found" });
+    const ts = now();
+    stmt.markSetWatched.run(user.id, kpId, ts, ts);
+    stmt.personalListDelete.run(user.id, kpId);
+    return json(res, 200, { mark: markPayload(stmt.markGet.get(user.id, kpId)) });
+  }
+
   // ── личный список на просмотр (глобально, без привязки к комнате) ─
   // Не проходит через access(roomId,...) намеренно — список не привязан ни к
   // какой комнате, достаточно просто быть вошедшим пользователем.
@@ -1336,6 +1362,35 @@ async function api(req, res, seg, user, query) {
       return json(res, 200, { movie: moviePayload(movie) });
     }
     return json(res, 405, { error: "method not allowed" });
+  }
+
+  // POST /my-list/draw {method} — тот же розыгрыш, что и у комнаты
+  // (POST /rooms/:id/draw ниже), но кандидаты — личный список текущего
+  // пользователя, а не очередь комнаты. Историю (selection_events) сюда
+  // намеренно не пишем — та таблица привязана к room_id (NOT NULL), заводить
+  // отдельную схему только ради истории для личного списка, которую никто
+  // ещё не просил, — преждевременно.
+  if (seg.length === 3 && seg[1] === "my-list" && seg[2] === "draw") {
+    if (m !== "POST") return json(res, 405, { error: "method not allowed" });
+    const body = await readJson(req);
+    const method = oneOf(body.method, Object.keys(selection.METHODS));
+    if (!method) return json(res, 400, { error: "bad method", message: "Неизвестный способ розыгрыша." });
+
+    const rows = stmt.personalListMovies.all(user.id);
+    if (!rows.length) {
+      return json(res, 409, { error: "empty list", message: "В личном списке нет фильмов — сначала добавьте хотя бы один." });
+    }
+    const candidates = rows.map(r => ({
+      kinopoiskId: r.kinopoisk_id, weight: 1,
+      title: r.title, year: r.year, posterUrl: r.poster_url,
+    }));
+    const outcome = selection.METHODS[method](
+      candidates.map(c => ({ kinopoiskId: c.kinopoiskId, weight: c.weight }))
+    );
+    const isObjectOutcome = outcome && typeof outcome === "object";
+    const resultKinopoiskId = isObjectOutcome ? outcome.resultKinopoiskId : outcome;
+    const rounds = isObjectOutcome ? outcome.rounds : null;
+    return json(res, 200, { candidates, resultKinopoiskId, rounds });
   }
 
   if (seg.length === 3 && seg[1] === "my-list") {
