@@ -403,11 +403,40 @@ select{
    витрина показана прямо под строкой поиска, две границы подряд смотрелись
    бы избыточно). */
 #homeSearchWrap{margin-top:1.6rem;padding-top:1.2rem;border-top:1px solid var(--md-sys-color-outline-variant)}
+#showcaseViewToggle{margin-top:1.2rem}
+#genreShelvesWrap{margin-top:1.2rem}
 #cachedMoviesWrap{margin-top:1.2rem}
+/* Переключатель сразу над видимой секцией (жанры или общий список) не должен
+   задваивать верхний отступ — сама секция уже margin-top:1.2rem получает от
+   правила выше (~, не +: между переключателем и cachedMoviesWrap в разметке
+   стоит genreShelvesWrap, часто hidden, но всё равно присутствующий в DOM). */
+#showcaseViewToggle:not([hidden]) ~ #genreShelvesWrap,
+#showcaseViewToggle:not([hidden]) ~ #cachedMoviesWrap{margin-top:.8rem}
 
 /* Панель сортировки над плитками (#cachedSortSelect) — select уже стилизован
-   общим правилом select{} выше в файле, тут только выравнивание строки. */
-.showcase-toolbar{display:flex;justify-content:flex-end;margin-top:.8rem}
+   общим правилом select{} выше в файле, тут только выравнивание строки.
+   #cachedGenreChip (фильтр по жанру с полки выше, см. renderGenreShelves в
+   app.js) прижат к левому краю через margin-right:auto, когда виден — при
+   hidden ничего не занимает и select остаётся у правого края как раньше. */
+.showcase-toolbar{display:flex;justify-content:flex-end;align-items:center;gap:.6rem;margin-top:.8rem}
+#cachedGenreChip{margin-right:auto;border:0;cursor:pointer;font:inherit}
+
+/* ===================== ЖАНРОВЫЕ ПОЛКИ ГЛАВНОЙ ===================== */
+/* Каждая полка — свой заголовок-ссылка + горизонтальный ряд тех же плиток
+   .movie-tile, что и в решётке витрины (переиспользуют renderMovieTile),
+   просто без grid: scroll-snap прокрутка вбок вместо переноса строк, чтобы
+   Netflix-подобные полки не спорили по высоте друг с другом. Плитка внутри
+   получает фиксированную ширину (а не minmax(...,1fr) как в .movie-grid) —
+   иначе flex сжал бы её произвольно. */
+.genre-shelf{margin-top:1.4rem}
+.genre-shelf .title-row{margin-bottom:0}
+.genre-shelf-row{
+  display:flex;gap:14px;margin-top:10px;overflow-x:auto;padding-bottom:4px;
+  scroll-snap-type:x proximity;
+}
+.genre-shelf-row .movie-tile{flex:0 0 12.5rem;scroll-snap-align:start}
+.genre-shelf-link{background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left}
+.genre-shelf-link:hover{text-decoration:underline}
 
 /* Пейджер под плитками витрины (Стр. N из M) — компактный ряд, кнопки те же
    .btn.outlined.sm, что и везде. Прячется целиком, если фильмов меньше

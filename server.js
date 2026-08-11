@@ -668,18 +668,48 @@ const MOVIES_SORT_ORDER = {
  * же, не на инициализации — вариантов ORDER BY несколько, кэшировать
  * подготовленные запросы на личном проекте такого масштаба не имеет смысла.
  */
-function moviesShowcasePage(limit, offset, sort, userId) {
+// genre — опциональный фильтр витрины по жанру (см. GET /api/genres/GET
+// /api/movies?genre=): жанры не отдельная таблица, а JSON-массив в
+// movies.genres, поэтому фильтр — EXISTS по json_each, а не обычный JOIN/WHERE.
+function moviesShowcasePage(limit, offset, sort, userId, genre) {
   const orderBy = MOVIES_SORT_ORDER[sort] || MOVIES_SORT_ORDER.recent;
+  const genreFilter = genre ? "AND EXISTS (SELECT 1 FROM json_each(movies.genres) je WHERE je.value = ?)" : "";
+  const params = genre ? [userId, genre, limit, offset] : [userId, limit, offset];
   const rows = db.prepare(`
     SELECT movies.*,
            (SELECT AVG(score) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS avg_score,
            (SELECT COUNT(*) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS rating_count,
            (SELECT score FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_score
       FROM movies
+     WHERE 1=1 ${genreFilter}
      ORDER BY ${orderBy}
      LIMIT ? OFFSET ?
-  `).all(userId, limit, offset);
+  `).all(...params);
   return rows;
+}
+
+function moviesCountFiltered(genre) {
+  if (!genre) return stmt.moviesCount.get().n;
+  return db.prepare(`
+    SELECT COUNT(*) AS n FROM movies
+     WHERE EXISTS (SELECT 1 FROM json_each(movies.genres) je WHERE je.value = ?)
+  `).get(genre).n;
+}
+
+// Топ жанров для блоков-подборок на главной (см. GET /api/genres) — считаем
+// динамически по факту наполнения кэша, а не заводим отдельную таблицу или
+// фиксированный список: пользователь решил, что данные с poiskkino.dev (а
+// значит, в конечном счёте с Кинопоиска) достаточно чистые, чтобы не
+// городить нормализацию/маппинг синонимов жанров.
+function topGenres(limit) {
+  return db.prepare(`
+    SELECT je.value AS genre, COUNT(*) AS n
+      FROM movies, json_each(movies.genres) je
+     WHERE je.value IS NOT NULL AND je.value != ''
+     GROUP BY je.value
+     ORDER BY n DESC, je.value ASC
+     LIMIT ?
+  `).all(limit);
 }
 
 /** Единая обработка ошибок poiskkino.js — квота/не настроено/апстрим в осмысленные HTTP-коды. */
@@ -1255,9 +1285,20 @@ async function api(req, res, seg, user, query) {
     // Неизвестный/отсутствующий sort — молча падаем на recent (не 400):
     // whitelist проверяется внутри moviesShowcasePage через MOVIES_SORT_ORDER.
     const sort = query.get("sort") || "recent";
-    const rows = moviesShowcasePage(limit, offset, sort, user.id);
-    const total = stmt.moviesCount.get().n;
-    return json(res, 200, { movies: rows.map(moviePayload), total, limit, offset });
+    const genre = str(query.get("genre"), 100) || null;
+    const rows = moviesShowcasePage(limit, offset, sort, user.id, genre);
+    const total = moviesCountFiltered(genre);
+    return json(res, 200, { movies: rows.map(moviePayload), total, limit, offset, genre });
+  }
+
+  // ── жанровые подборки на главной: топ жанров с количеством фильмов ─
+  // Список сам по себе дешёвый (одна агрегация по всему кэшу), карточки
+  // каждой полки фронт подгружает отдельно через уже существующий
+  // GET /api/movies?genre=... — здесь только заголовки блоков.
+  if (seg.length === 2 && seg[1] === "genres") {
+    if (m !== "GET") return json(res, 405, { error: "method not allowed" });
+    const rows = topGenres(12);
+    return json(res, 200, { genres: rows.map(r => ({ genre: r.genre, count: r.n })) });
   }
 
   // ── карточка фильма целиком (используется «Подробнее» у результатов

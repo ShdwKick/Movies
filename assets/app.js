@@ -55,7 +55,14 @@ let drawState = null;
 // limit&offset&sort). total заполняется каждым ответом сервера, offset
 // ОБЯЗАТЕЛЬНО сбрасывается на 0 при смене sort — иначе легко улететь на
 // несуществующую страницу для новой сортировки (см. renderCachedMovies).
-let showcaseState = { offset: 0, limit: 24, sort: "recent", total: 0 };
+// genre — активный фильтр витрины с полки жанров ниже (см. renderGenreShelves/
+// #cachedGenreChip); null — витрина без фильтра, как раньше.
+let showcaseState = { offset: 0, limit: 24, sort: "recent", total: 0, genre: null };
+// Вид витрины «Из базы»: общий список (по умолчанию) или разбивка по полкам
+// жанров — переключатель #showcaseViewToggle (см. applyShowcaseView).
+// Персональной настройкой/localStorage не делаем — та же логика, что и у
+// showcaseState.sort: сброс на дефолт при обычной перезагрузке ожидаем.
+let showcaseView = "all";
 
 /** Как подписывать человека: имя показывается, только если он сам включил его
     показ в общем кабинете BurningHouse — иначе остаётся логин. */
@@ -221,33 +228,90 @@ async function showRooms() {
   state.me = data.me;
   state.rooms = data.rooms;
   renderRooms();
-  renderCachedMovies(state.rooms);
+  refreshShowcase(state.rooms);
 }
+
+/** Общая точка входа для витрины «Из базы» — решает, есть ли вообще жанры (а
+    значит, есть ли смысл показывать #showcaseViewToggle), и рендерит тот из
+    двух видов (общий список / полки по жанрам), что выбран в showcaseView.
+    Вызывается и при обычном заходе на главную (showRooms), и при возврате из
+    поиска на главной (runHomeSearch — пустая строка снова показывает
+    витрину). Жанры на каждый вызов запрашиваются заново, а не кэшируются —
+    на масштабе личного проекта это дешевле, чем городить инвалидацию кэша. */
+async function refreshShowcase(rooms) {
+  const genresData = await act(() => api("/genres"));
+  const hasGenres = !!(genresData && genresData.genres.length);
+  $("showcaseViewToggle").hidden = !hasGenres;
+  if (!hasGenres) showcaseView = "all"; // нечего переключать — жанров в кэше нет
+  syncShowcaseViewButtons();
+  if (showcaseView === "genres") {
+    $("cachedMoviesWrap").hidden = true;
+    renderGenreShelves(rooms, genresData);
+  } else {
+    $("genreShelvesWrap").hidden = true;
+    renderCachedMovies(rooms);
+  }
+}
+
+function syncShowcaseViewButtons() {
+  $("showcaseViewAllBtn").classList.toggle("sel", showcaseView === "all");
+  $("showcaseViewGenresBtn").classList.toggle("sel", showcaseView === "genres");
+}
+
+$("showcaseViewAllBtn").onclick = () => {
+  showcaseView = "all";
+  syncShowcaseViewButtons();
+  $("genreShelvesWrap").hidden = true;
+  renderCachedMovies(state.rooms);
+};
+$("showcaseViewGenresBtn").onclick = () => {
+  showcaseView = "genres";
+  syncShowcaseViewButtons();
+  $("cachedMoviesWrap").hidden = true;
+  renderGenreShelves(state.rooms);
+};
 
 /** Витрина закэшированных фильмов (GET /api/movies?limit&offset&sort,
     состояние — showcaseState), без текстового заголовка — только визуальный
-    разделитель (#cachedMoviesWrap в styles.css). TODO(будущее): разделение
-    витрины по жанрам. Раньше тут стояла полноразмерная карточка результата
-    поиска — слишком тяжело для главной; теперь компактная плитка
-    (renderMovieTile), клик по которой открывает #movieInfoModalBackdrop с
-    теми же данными (moviePayload уже полный, повторный запрос к сети не
-    нужен). Секция скрыта целиком, пока кэш пуст — план явно требует не
-    показывать пустой блок. Пейджер (#cachedPager) прячется отдельно, если
-    все фильмы помещаются на одну страницу — сортировка (#cachedSortSelect)
-    при этом остаётся видимой. */
+    разделитель (#cachedMoviesWrap в styles.css). Раньше тут стояла
+    полноразмерная карточка результата поиска — слишком тяжело для главной;
+    теперь компактная плитка (renderMovieTile), клик по которой открывает
+    #movieInfoModalBackdrop с теми же данными (moviePayload уже полный,
+    повторный запрос к сети не нужен). Секция скрыта целиком, пока кэш пуст —
+    план явно требует не показывать пустой блок. Пейджер (#cachedPager)
+    прячется отдельно, если все фильмы помещаются на одну страницу —
+    сортировка (#cachedSortSelect) при этом остаётся видимой. Видимость
+    относительно жанровых полок решает refreshShowcase/toggle-обработчики
+    выше — сама функция ничего про showcaseView не знает. */
 async function renderCachedMovies(rooms) {
-  const { limit, offset, sort } = showcaseState;
-  const data = await act(() => api(`/movies?limit=${limit}&offset=${offset}&sort=${encodeURIComponent(sort)}`));
+  const { limit, offset, sort, genre } = showcaseState;
+  let url = `/movies?limit=${limit}&offset=${offset}&sort=${encodeURIComponent(sort)}`;
+  if (genre) url += `&genre=${encodeURIComponent(genre)}`;
+  const data = await act(() => api(url));
   const wrap = $("cachedMoviesWrap");
-  if (!data || !data.movies.length) { wrap.hidden = true; return; }
+  // Пустая витрина при активном фильтре — не прячем секцию целиком (иначе
+  // непонятно, куда делся список и как вернуться), а показываем пустой грид
+  // с чипом фильтра, который снимается тем же кликом, что и обычно.
+  if (!data || (!data.movies.length && !genre)) { wrap.hidden = true; return; }
   wrap.hidden = false;
   showcaseState.total = data.total;
 
   $("cachedSortSelect").value = sort;
 
+  const chip = $("cachedGenreChip");
+  if (genre) {
+    chip.hidden = false;
+    chip.textContent = `Жанр: ${genre} ×`;
+    chip.onclick = () => { showcaseState.genre = null; showcaseState.offset = 0; renderCachedMovies(rooms); };
+  } else {
+    chip.hidden = true;
+    chip.onclick = null;
+  }
+
   const box = $("cachedMoviesList");
   box.textContent = "";
   openCardMenu = null; // старые плитки со своими меню-«…» уходят целиком
+  if (!data.movies.length) box.append(el("p", "muted", "По этому жанру пока пусто."));
   for (const mv of data.movies) {
     box.append(renderMovieTile(mv, {
       menu: renderAddToMenu(mv.kinopoiskId, rooms),
@@ -267,6 +331,74 @@ async function renderCachedMovies(rooms) {
     $("cachedPrevBtn").disabled = offset <= 0;
     $("cachedNextBtn").disabled = offset + limit >= data.total;
   }
+}
+
+/** Полки по жанрам — альтернативный вид витрины «Из базы» (переключатель
+    #showcaseViewToggle, видимость которого решает refreshShowcase; сама эта
+    функция вызывается, только когда showcaseView === "genres"). Список
+    жанров — GET /api/genres (топ по кэшу), затем по 10 недавних фильмов на
+    жанр через уже существующий GET /api/movies?genre=. Список жанров не
+    нормализуем и не фильтруем от опечаток — пользователь решил, что данные с
+    poiskkino.dev достаточно чистые (в конечном счёте это Кинопоиск), заводить
+    справочник/маппинг синонимов не нужно. genresList — опционально уже
+    полученный refreshShowcase список (не дёргаем /api/genres второй раз при
+    обычном заходе на главную); при переключении кнопкой #showcaseViewGenresBtn
+    его нет — тогда запрашиваем сами. Клик по заголовку/«Показать все» не
+    остаётся в этом виде, а переключает на общий список ниже через
+    openGenreFilter — тот же переиспользуемый список, просто отфильтрованный
+    (showcaseState.genre/#cachedGenreChip), без отдельного экрана под жанр. */
+async function renderGenreShelves(rooms, genresList) {
+  const wrap = $("genreShelvesWrap");
+  const list = genresList || await act(() => api("/genres"));
+  if (!list || !list.genres.length) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+
+  const shelves = await Promise.all(list.genres.map(g =>
+    act(() => api(`/movies?limit=10&sort=recent&genre=${encodeURIComponent(g.genre)}`))
+      .then(data => ({ genre: g.genre, movies: data ? data.movies : [] }))
+  ));
+
+  wrap.textContent = "";
+  for (const shelf of shelves) {
+    if (!shelf.movies.length) continue;
+    wrap.append(renderGenreShelf(shelf.genre, shelf.movies, rooms));
+  }
+  wrap.hidden = !wrap.children.length;
+}
+
+async function openGenreFilter(genre) {
+  showcaseView = "all";
+  syncShowcaseViewButtons();
+  $("genreShelvesWrap").hidden = true;
+  showcaseState.genre = genre;
+  showcaseState.offset = 0;
+  await renderCachedMovies(state.rooms);
+  $("cachedMoviesWrap").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderGenreShelf(genre, movies, rooms) {
+  const section = el("div", "genre-shelf");
+  const titleRow = el("div", "title-row");
+  const heading = el("h2");
+  const headingLink = el("button", "genre-shelf-link", genre);
+  headingLink.type = "button";
+  headingLink.onclick = () => openGenreFilter(genre);
+  heading.append(headingLink);
+  const moreBtn = el("button", "btn tonal sm", "Показать все");
+  moreBtn.type = "button";
+  moreBtn.onclick = () => openGenreFilter(genre);
+  titleRow.append(heading, moreBtn);
+  section.append(titleRow);
+
+  const row = el("div", "genre-shelf-row");
+  for (const mv of movies) {
+    row.append(renderMovieTile(mv, {
+      menu: renderAddToMenu(mv.kinopoiskId, rooms),
+      rating: { kinopoiskId: mv.kinopoiskId, score: mv.myScore },
+    }));
+  }
+  section.append(row);
+  return section;
 }
 
 $("cachedSortSelect").onchange = e => {
@@ -312,7 +444,7 @@ async function runHomeSearch() {
   if (!q) {
     results.hidden = true;
     results.textContent = "";
-    renderCachedMovies(state.rooms);
+    refreshShowcase(state.rooms);
     return;
   }
   const data = await act(() => api("/search?q=" + encodeURIComponent(q)));
@@ -325,6 +457,8 @@ async function runHomeSearch() {
 }
 
 function renderHomeSearchResults(movies, rooms) {
+  $("showcaseViewToggle").hidden = true;
+  $("genreShelvesWrap").hidden = true;
   $("cachedMoviesWrap").hidden = true;
   const box = $("homeSearchResults");
   box.hidden = false;
@@ -972,19 +1106,28 @@ function renderCardMenu(items, opts = {}) {
   return wrap;
 }
 
-/** Меню «Добавить в…» — компактная замена ВСЕГДА-видимого renderRoomPicker
-    для мест, где место ЖАЛКО (узкая плитка/список результатов): плитка
-    витрины (renderMovieTile), строка результата глобального поиска
-    (renderSearchResultRow) и модалка «Фильм» (renderMovieInfoModal). «В
+/** Меню действий с фильмом — компактная замена ВСЕГДА-видимого
+    renderRoomPicker для мест, где место ЖАЛКО (узкая плитка/список
+    результатов): плитка витрины (renderMovieTile), строка результата
+    глобального поиска (renderSearchResultRow) и модалка «Фильм»
+    (renderMovieInfoModal, там же раньше стояла отдельная кнопка
+    «Отметить просмотренным» рядом со шкалой оценки — перенесена сюда,
+    в дропдаун, вместо своей кнопки везде, где это меню используется). «В
     личный список» — сразу выполняет действие (POST /my-list), «Добавить в
     комнату» подменяет содержимое .menu на renderRoomPicker (select комнат +
     кнопка) — сам пикер, без второй кнопки личного списка, она отдельным
-    пунктом уровнем выше. */
+    пунктом уровнем выше. Заголовок по умолчанию («Действия с фильмом» —
+    см. renderCardMenu) тут ничем не переопределяем: раньше был «Добавить
+    в…», но с «Отметить просмотренным» внутри это уже не только добавление. */
 function renderAddToMenu(kinopoiskId, rooms) {
   return renderCardMenu([
+    {
+      label: "Отметить просмотренным",
+      onClick: () => act(() => api(`/movies/${kinopoiskId}/watched`, { method: "POST" }), "Отмечено просмотренным"),
+    },
     { label: "Добавить в комнату", onClick: menu => renderRoomPicker(menu, kinopoiskId, rooms) },
     { label: "В личный список", onClick: () => act(() => api("/my-list", { method: "POST", body: { kinopoiskId } }), "Добавлено в личный список") },
-  ], { title: "Добавить в…" });
+  ]);
 }
 
 // Карточка очереди — только queued (watched теперь отдельным списком в
@@ -2443,6 +2586,18 @@ function renderMyListInto(container, items, onChange) {
   for (const it of items) {
     const mv = it.movie;
     const menu = renderCardMenu([
+      {
+        label: "Отметить просмотренным",
+        // Тот же глобальный эндпоинт, что и у «Отметить просмотренным» на
+        // экране розыгрыша (см. showDrawResult) — сам убирает фильм из
+        // личного списка на сервере, onChange() тут просто перечитывает
+        // список, чтобы карточка пропала и с экрана.
+        onClick: () => act(async () => {
+          closeCardMenu();
+          await api(`/movies/${mv.kinopoiskId}/watched`, { method: "POST" });
+          await onChange();
+        }, "Отмечено просмотренным"),
+      },
       {
         label: "Добавить в комнату",
         onClick: async menu => {
