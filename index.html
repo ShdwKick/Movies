@@ -88,17 +88,15 @@
     <span class="muted" id="roomsPagerLabel"></span>
     <button class="btn outlined sm" id="roomsNextBtn">Вперёд →</button>
   </div>
-  <div class="bar">
-    <input type="text" id="newRoomTitle" placeholder="Название комнаты" maxlength="200">
-    <button class="btn filled" id="createRoomBtn">Создать</button>
-  </div>
-
-  <h2>Есть код приглашения?</h2>
-  <div class="bar">
-    <input type="text" id="joinCodeInput" placeholder="Код комнаты" maxlength="16">
-    <button class="icon-btn tonal" id="joinCodeBtn" title="Найти" aria-label="Найти">
-      <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-    </button>
+  <!-- Раньше тут стояли две всегда открытые формы (название+«Создать» и код
+       приглашения+«Найти») — теперь два широких кнопки, каждая открывает
+       свою маленькую модалку (см. bindModal("createRoomModalBackdrop",...)/
+       bindModal("joinRoomModalBackdrop",...) в app.js); сами поля и
+       обработчики (#newRoomTitle/#createRoomBtn, #joinCodeInput/#joinCodeBtn)
+       никуда не делись, просто переехали внутрь модалок ниже. -->
+  <div class="room-actions-row">
+    <button class="btn filled" id="createRoomOpenBtn" type="button">Создать комнату</button>
+    <button class="btn outlined" id="joinRoomOpenBtn" type="button">Присоединиться к комнате</button>
   </div>
 
   <!-- Поиск фильмов прямо на главной, над витриной — тот же принцип, что в
@@ -117,31 +115,22 @@
     <div id="homeSearchResults" hidden></div>
   </div>
 
-  <!-- Переключатель вида витрины «Из базы» — общий список (по умолчанию) или
-       разбивка по жанрам (см. applyShowcaseView в app.js). Показан, только
-       когда жанры вообще есть, чем управляет сам JS (initShowcase) — если
-       жанров нет, переключать не на что, поэтому кнопка скрыта, а не
-       задизейблена. -->
-  <div class="mini-seg" id="showcaseViewToggle" hidden>
-    <button type="button" id="showcaseViewAllBtn">Все фильмы</button>
-    <button type="button" id="showcaseViewGenresBtn">По жанрам</button>
-  </div>
-
-  <!-- Жанровые подборки (GET /api/genres + GET /api/movies?genre=...) —
-       горизонтальные полки, по одной на каждый из наиболее частых жанров в
-       кэше (см. renderGenreShelves в app.js). Клик по названию жанра/
-       «Показать все» переключает на общий список ниже (#cachedMoviesWrap) с
-       фильтром через showcaseState.genre — переиспользует его пагинацию/
-       сортировку, не заводя копию. Видна, только когда активен вид «По
-       жанрам» (#showcaseViewToggle) — см. applyShowcaseView. -->
-  <div id="genreShelvesWrap" hidden></div>
-
-  <!-- Витрина последних закэшированных фильмов (GET /api/movies) — секция
-       скрыта целиком, пока кэш пуст (см. renderCachedMovies в app.js), пока
-       на главной активен поиск выше (см. homeSearchInput в app.js — вместо
-       неё показываются результаты), или пока выбран вид «По жанрам». -->
-  <div id="cachedMoviesWrap" hidden>
-    <div class="showcase-toolbar">
+  <!-- Общая панель над витриной «Из базы» — переключатель вида (общий список/
+       по жанрам, см. refreshShowcase в app.js) слева и сортировка+фильтр
+       общего списка справа, специально ОДНОЙ строкой (просили выровнять
+       переключатель по вертикали с сортировкой). Панель — общий родитель для
+       genreShelvesWrap/cachedMoviesWrap ниже именно поэтому: переключатель
+       должен оставаться на месте независимо от того, какой из двух видов
+       сейчас показан, а сортировка/чип относятся только к общему списку —
+       #showcaseFlatControls прячется целиком в виде «По жанрам»
+       (updateShowcaseToolbarVisibility в app.js). Вся панель скрыта, только
+       когда показывать вообще нечего (жанров нет И кэш пуст). -->
+  <div class="showcase-toolbar" id="showcaseToolbar" hidden>
+    <div class="mini-seg" id="showcaseViewToggle" hidden>
+      <button type="button" id="showcaseViewAllBtn">Все фильмы</button>
+      <button type="button" id="showcaseViewGenresBtn">По жанрам</button>
+    </div>
+    <div class="showcase-flat-controls" id="showcaseFlatControls">
       <button class="chip" id="cachedGenreChip" type="button" hidden></button>
       <select id="cachedSortSelect">
         <option value="recent">Недавно добавленные</option>
@@ -153,6 +142,22 @@
         <option value="rating_asc">Низкий рейтинг</option>
       </select>
     </div>
+  </div>
+
+  <!-- Жанровые подборки (GET /api/genres + GET /api/movies?genre=...) —
+       горизонтальные полки, по одной на каждый из наиболее частых жанров в
+       кэше (см. renderGenreShelves в app.js). Клик по названию жанра/
+       «Показать все» переключает на общий список ниже (#cachedMoviesWrap) с
+       фильтром через showcaseState.genre — переиспользует его пагинацию/
+       сортировку, не заводя копию. Видна, только когда активен вид «По
+       жанрам» (#showcaseViewToggle) — см. refreshShowcase. -->
+  <div id="genreShelvesWrap" hidden></div>
+
+  <!-- Витрина последних закэшированных фильмов (GET /api/movies) — секция
+       скрыта целиком, пока кэш пуст (см. renderCachedMovies в app.js), пока
+       на главной активен поиск выше (см. homeSearchInput в app.js — вместо
+       неё показываются результаты), или пока выбран вид «По жанрам». -->
+  <div id="cachedMoviesWrap" hidden>
     <div class="movie-grid" id="cachedMoviesList"></div>
     <div class="pager" id="cachedPager">
       <button class="btn outlined sm" id="cachedPrevBtn">← Назад</button>
@@ -161,6 +166,41 @@
     </div>
   </div>
 </section>
+
+<!-- ===================== МОДАЛКА: СОЗДАТЬ КОМНАТУ ===================== -->
+<div class="modal-backdrop hidden" id="createRoomModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="createRoomModalTitle">
+    <div class="modal-head">
+      <h2 id="createRoomModalTitle">Создать комнату</h2>
+      <button class="icon-btn" id="createRoomModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="bar">
+      <input type="text" id="newRoomTitle" placeholder="Название комнаты" maxlength="200">
+      <button class="btn filled" id="createRoomBtn">Создать</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== МОДАЛКА: ПРИСОЕДИНИТЬСЯ К КОМНАТЕ ===================== -->
+<div class="modal-backdrop hidden" id="joinRoomModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="joinRoomModalTitle">
+    <div class="modal-head">
+      <h2 id="joinRoomModalTitle">Присоединиться к комнате</h2>
+      <button class="icon-btn" id="joinRoomModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <p class="muted">Код приглашения, которым с вами поделились.</p>
+    <div class="bar">
+      <input type="text" id="joinCodeInput" placeholder="Код комнаты" maxlength="16">
+      <button class="icon-btn tonal" id="joinCodeBtn" title="Найти" aria-label="Найти">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
 
 <!-- ===================== ПРОФИЛЬ СЕРВИСА (личные фильмовые данные) =====================
      Хаб-страница: раньше вела на #/watched и #/my-list двумя кнопками-вкладками,

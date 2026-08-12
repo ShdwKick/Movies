@@ -180,9 +180,15 @@ a{color:var(--md-sys-color-primary)}
   .header-search.header-search-open #globalSearchClearBtn{display:grid}
 }
 .header-search input[type="text"]:focus{border:none}
+/* Ширина ровно как у поля ввода — left:0/right:0 вместо фиксированного
+   width+центрирующего transform: контейнер (.header-search-results) лежит
+   внутри самого .header-search, так что 0/0 растягивает его строго на
+   ширину родителя (18rem в покое, 35rem по фокусу — а результаты видны
+   только когда фокус внутри .header-search, см. runGlobalSearch), включая
+   рост при :focus-within. */
 .header-search-results{
-  position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);
-  width:26rem;max-width:90vw;max-height:70vh;overflow-y:auto;z-index:30;
+  position:absolute;top:calc(100% + 8px);left:0;right:0;
+  max-height:70vh;overflow-y:auto;z-index:30;
   background:var(--md-sys-color-surface-container-low);
   border:1px solid var(--md-sys-color-outline-variant);
   border-radius:var(--md-sys-shape-corner-l);
@@ -284,6 +290,15 @@ select{
    инпут наоборot делится строкой с кнопкой, а не занимает её целиком. */
 .bar input[type="text"]{flex:1;width:auto;min-width:0}
 
+/* Две широкие кнопки под списком комнат («Создать комнату»/«Присоединиться к
+   комнате») — раньше тут стояли всегда открытые формы, теперь каждая кнопка
+   просто открывает свою модалку (см. index.html/bindModal в app.js). Обе
+   поровну делят строку (flex:1), на узком экране складываются в столбец —
+   тот же перелом, что и у .draw-method-row. */
+.room-actions-row{display:flex;gap:.8rem;margin-top:1.2rem}
+.room-actions-row .btn{flex:1}
+@media(max-width:26rem){.room-actions-row{flex-direction:column}}
+
 /* ===================== ЭКРАН «НУЖЕН ВХОД» =====================
    Показывается только когда увести на auth не получилось (см.
    bh-no-service-login-page) — своей формы входа у сервиса нет. */
@@ -337,28 +352,22 @@ select{
 .movie-info .title{font-weight:650;font-size:15px}
 .chip-row{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.4rem}
 
-/* Карточка результата поиска в модалке «Добавить фильм» — кликабельна
-   целиком (клик добавляет фильм в комнату, см. renderMovieResultCard в
-   app.js). Это div с role="button", а не настоящий <button>: внутри есть
-   своя icon-btn «Подробнее», а вложенный <button> в <button> невалиден.
-   Кнопка-стрелка встаёт в movie-card-head как обычный третий flex-элемент
-   (align-items:stretch без явной cross-size у icon-btn == flex-start, т.е.
-   верхний край) — без абсолютного позиционирования. Очередь/история/
-   глобальный поиск используют голый .movie-card без этого модификатора и
-   остаются некликабельными. */
+/* Кликабельная целиком карточка результата поиска — клик открывает
+   подробности (openMovieInfoModal); в комнатной модалке «Добавить фильм»
+   (renderMovieResultCard) поверх есть ещё своя icon-btn «+» для мгновенного
+   добавления, в строках глобального/домашнего поиска (renderSearchResultRow)
+   действий на самой строке вообще нет — см. app.js. Это div с
+   role="button", а не настоящий <button>: там, где есть своя кнопка внутри,
+   вложенный <button> в <button> был бы невалиден. Кнопка встаёт в
+   movie-card-head как обычный третий flex-элемент (align-items:stretch без
+   явной cross-size у icon-btn == flex-start, т.е. верхний край) — без
+   абсолютного позиционирования. Очередь/история используют голый
+   .movie-card без этого модификатора и остаются некликабельными целиком —
+   там действия только через своё меню-«…». */
 .movie-card-pick{cursor:pointer}
 .movie-card-pick:hover{border-color:color-mix(in srgb,var(--md-sys-color-primary) 40%,var(--md-sys-color-outline-variant))}
 .movie-card-pick:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
 .movie-card-pick .movie-card-head{align-items:flex-start}
-
-/* Стрелка «Подробнее» + меню «Добавить в…» в шапке результата ГЛОБАЛЬНОГО
-   поиска (renderSearchResultRow) — тот же приём, что и одиночная icon-btn
-   «Подробнее» у .movie-card-pick выше (третий flex-элемент movie-card-head,
-   без absolute-позиционирования), но их тут два, поэтому в общем
-   flex-контейнере с небольшим gap. margin-top:0 на .menu-wrap — тот же
-   сброс, что у .title-actions/.appbar-inner, тут это не строка заголовка. */
-.movie-card-head-actions{display:flex;align-items:flex-start;gap:.3rem;flex:none}
-.movie-card-head-actions .menu-wrap{margin-top:0}
 
 .movie-detail{margin-top:.6rem;font-size:.9rem}
 .movie-detail p{margin:.3rem 0}
@@ -403,23 +412,22 @@ select{
    витрина показана прямо под строкой поиска, две границы подряд смотрелись
    бы избыточно). */
 #homeSearchWrap{margin-top:1.6rem;padding-top:1.2rem;border-top:1px solid var(--md-sys-color-outline-variant)}
-#showcaseViewToggle{margin-top:1.2rem}
-#genreShelvesWrap{margin-top:1.2rem}
-#cachedMoviesWrap{margin-top:1.2rem}
-/* Переключатель сразу над видимой секцией (жанры или общий список) не должен
-   задваивать верхний отступ — сама секция уже margin-top:1.2rem получает от
-   правила выше (~, не +: между переключателем и cachedMoviesWrap в разметке
-   стоит genreShelvesWrap, часто hidden, но всё равно присутствующий в DOM). */
-#showcaseViewToggle:not([hidden]) ~ #genreShelvesWrap,
-#showcaseViewToggle:not([hidden]) ~ #cachedMoviesWrap{margin-top:.8rem}
+#showcaseToolbar{margin-top:1.2rem}
+#genreShelvesWrap{margin-top:.8rem}
+#cachedMoviesWrap{margin-top:.8rem}
 
-/* Панель сортировки над плитками (#cachedSortSelect) — select уже стилизован
-   общим правилом select{} выше в файле, тут только выравнивание строки.
-   #cachedGenreChip (фильтр по жанру с полки выше, см. renderGenreShelves в
-   app.js) прижат к левому краю через margin-right:auto, когда виден — при
-   hidden ничего не занимает и select остаётся у правого края как раньше. */
-.showcase-toolbar{display:flex;justify-content:flex-end;align-items:center;gap:.6rem;margin-top:.8rem}
-#cachedGenreChip{margin-right:auto;border:0;cursor:pointer;font:inherit}
+/* Общая панель над витриной — переключатель вида (#showcaseViewToggle) слева,
+   сортировка+фильтр общего списка (#showcaseFlatControls) справа, одной
+   строкой (см. комментарий в index.html — просили выровнять переключатель по
+   вертикали с сортировкой). margin-right:auto на переключателе прижимает его
+   к левому краю и одновременно толкает контролы вправо; когда переключатель
+   hidden (жанров нет вовсе), controls просто остаются у правого края, как
+   раньше. #showcaseFlatControls целиком прячется в виде «По жанрам» —
+   сортировка/фильтр общего списка там ни на что не влияют. */
+.showcase-toolbar{display:flex;justify-content:flex-end;align-items:center;gap:.6rem}
+#showcaseViewToggle{margin-right:auto}
+.showcase-flat-controls{display:flex;align-items:center;gap:.6rem}
+#cachedGenreChip{border:0;cursor:pointer;font:inherit}
 
 /* ===================== ЖАНРОВЫЕ ПОЛКИ ГЛАВНОЙ ===================== */
 /* Каждая полка — свой заголовок-ссылка + горизонтальный ряд тех же плиток

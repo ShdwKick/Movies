@@ -258,6 +258,20 @@ function syncShowcaseViewButtons() {
   $("showcaseViewGenresBtn").classList.toggle("sel", showcaseView === "genres");
 }
 
+/** #showcaseToolbar (переключатель вида + сортировка/фильтр общего списка,
+    см. index.html) — общий родитель для genreShelvesWrap/cachedMoviesWrap,
+    поэтому его видимость и видимость #showcaseFlatControls внутри него
+    (сортировка+чип, которые имеют смысл только для общего списка) не решает
+    ни renderCachedMovies, ни renderGenreShelves сами по себе — только эта
+    функция, вызываемая в конце обеих. Панель скрыта целиком, только когда
+    показывать вообще нечего (жанров нет И общий список пуст). */
+function updateShowcaseToolbarVisibility() {
+  const hasGenres = !$("showcaseViewToggle").hidden;
+  const hasFlatMovies = !$("cachedMoviesWrap").hidden;
+  $("showcaseToolbar").hidden = !hasGenres && !hasFlatMovies;
+  $("showcaseFlatControls").hidden = showcaseView !== "all";
+}
+
 $("showcaseViewAllBtn").onclick = () => {
   showcaseView = "all";
   syncShowcaseViewButtons();
@@ -292,7 +306,7 @@ async function renderCachedMovies(rooms) {
   // Пустая витрина при активном фильтре — не прячем секцию целиком (иначе
   // непонятно, куда делся список и как вернуться), а показываем пустой грид
   // с чипом фильтра, который снимается тем же кликом, что и обычно.
-  if (!data || (!data.movies.length && !genre)) { wrap.hidden = true; return; }
+  if (!data || (!data.movies.length && !genre)) { wrap.hidden = true; updateShowcaseToolbarVisibility(); return; }
   wrap.hidden = false;
   showcaseState.total = data.total;
 
@@ -331,6 +345,7 @@ async function renderCachedMovies(rooms) {
     $("cachedPrevBtn").disabled = offset <= 0;
     $("cachedNextBtn").disabled = offset + limit >= data.total;
   }
+  updateShowcaseToolbarVisibility();
 }
 
 /** Полки по жанрам — альтернативный вид витрины «Из базы» (переключатель
@@ -350,7 +365,7 @@ async function renderCachedMovies(rooms) {
 async function renderGenreShelves(rooms, genresList) {
   const wrap = $("genreShelvesWrap");
   const list = genresList || await act(() => api("/genres"));
-  if (!list || !list.genres.length) { wrap.hidden = true; return; }
+  if (!list || !list.genres.length) { wrap.hidden = true; updateShowcaseToolbarVisibility(); return; }
   wrap.hidden = false;
 
   const shelves = await Promise.all(list.genres.map(g =>
@@ -364,6 +379,7 @@ async function renderGenreShelves(rooms, genresList) {
     wrap.append(renderGenreShelf(shelf.genre, shelf.movies, rooms));
   }
   wrap.hidden = !wrap.children.length;
+  updateShowcaseToolbarVisibility();
 }
 
 async function openGenreFilter(genre) {
@@ -452,26 +468,27 @@ async function runHomeSearch() {
   // Запрос мог устареть, пока летел (строку успели стереть/поменять) —
   // не подсовываем результат уже не тому вводу.
   if ($("homeSearchInput").value.trim() !== q) return;
-  const roomsData = await act(() => api("/rooms"));
-  renderHomeSearchResults(data.movies, roomsData ? roomsData.rooms : []);
+  renderHomeSearchResults(data.movies);
 }
 
-function renderHomeSearchResults(movies, rooms) {
-  $("showcaseViewToggle").hidden = true;
+function renderHomeSearchResults(movies) {
+  $("showcaseToolbar").hidden = true;
   $("genreShelvesWrap").hidden = true;
   $("cachedMoviesWrap").hidden = true;
   const box = $("homeSearchResults");
   box.hidden = false;
   box.textContent = "";
-  openCardMenu = null; // старые строки со своими меню «Добавить в…» уходят целиком
   if (!movies.length) { box.append(el("p", "muted", "Ничего не нашлось.")); return; }
-  for (const mv of movies) box.append(renderSearchResultRow(mv, rooms));
+  for (const mv of movies) box.append(renderSearchResultRow(mv));
 }
 
 // Иконка «Смотреть» на плитке витрины — тот же плей-треугольник, что и
 // текстовая кнопка «Смотреть» карточки очереди (renderMovieCard), просто в
 // виде компактной icon-btn.xs: там место для текста есть, тут нет.
 const PLAY_ICON = '<svg class="icon" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8V4z"/></svg>';
+// Кнопка быстрого добавления в комнату (renderMovieResultCard) — тот же плюс,
+// что у #addMovieBtn в шапке комнаты.
+const PLUS_ICON = '<svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>';
 
 /** Единая компактная карточка фильма — постер (с меню действий, бейджем в
     правом верхнем углу поверх обложки), кружок личной оценки слева от
@@ -680,12 +697,17 @@ function plural(n, one, few, many) {
   return b === 1 ? one : many;
 }
 
+// Обе формы (создание/присоединение) теперь живут в своих модалках
+// (#createRoomModalBackdrop/#joinRoomModalBackdrop, открываются широкими
+// кнопками под списком комнат — см. index.html), сами поля/обработчики не
+// изменились, только закрывают свою модалку при успешном действии.
 $("createRoomBtn").onclick = async () => {
   const input = $("newRoomTitle");
   const title = input.value.trim();
   const data = await act(() => api("/rooms", { method: "POST", body: { title: title || "Новая комната" } }));
   if (!data) return;
   input.value = "";
+  closeModal("createRoomModalBackdrop");
   location.hash = "#/room/" + data.room.id;
 };
 $("newRoomTitle").addEventListener("keydown", e => { if (e.key === "Enter") $("createRoomBtn").click(); });
@@ -693,10 +715,13 @@ $("newRoomTitle").addEventListener("keydown", e => { if (e.key === "Enter") $("c
 function goToCode(raw) {
   const code = raw.trim().toUpperCase();
   if (!code) return;
+  closeModal("joinRoomModalBackdrop");
   location.hash = "#/join/" + code;
 }
 $("joinCodeBtn").onclick = () => goToCode($("joinCodeInput").value);
 $("joinCodeInput").addEventListener("keydown", e => { if (e.key === "Enter") goToCode(e.target.value); });
+bindModal("createRoomModalBackdrop", "createRoomOpenBtn", "createRoomModalClose");
+bindModal("joinRoomModalBackdrop", "joinRoomOpenBtn", "joinRoomModalClose");
 
 // ───────────────────────── одна комната ─────────────────────────
 async function openRoom(id) {
@@ -767,10 +792,9 @@ $("movieSearchBtn").onclick = runMovieSearch;
 $("movieSearchInput").addEventListener("keydown", e => { if (e.key === "Enter") runMovieSearch(); });
 
 /** Общая часть карточки результата поиска — постер+название+чипы, без
-    кнопок действий: те разные в комнатной модалке «Добавить фильм» (клик по
-    всей карточке добавляет — комната уже известна) и в глобальной модалке
-    поиска (стрелка «Подробнее» + меню «Добавить в…», см. renderSearchResultRow
-    ниже — там цель заранее не известна). */
+    кнопок действий: те разные у вызывающих (renderMovieResultCard — своя
+    «+», renderSearchResultRow — вообще без кнопок, вся строка ведёт к
+    подробностям, см. ниже). */
 function renderMovieResultRow(mv) {
   const row = el("div", "movie-card-head");
   const year = mv.year ? ` (${mv.year})` : "";
@@ -784,46 +808,47 @@ function renderMovieResultRow(mv) {
 }
 
 /** Карточка результата поиска в модалке «Добавить фильм» (комната уже
-    известна из state.room) — кликабельна целиком, клик добавляет фильм в
-    комнату и закрывает модалку (см. план: убрали кнопку «Добавить» и кнопку
-    «Готово» разом — сценарий добавления нескольких фильмов подряд ушёл).
-    Настоящий <button> для всей карточки не подходит: внутри есть icon-btn
-    «Подробнее» (открывает модалку «Фильм» — openMovieInfoModal, та же, что
-    и у остальных карточек по сервису), а <button> внутри <button> невалиден
-    — поэтому div с role="button"/tabindex + свой keydown на Enter/Space.
-    renderMovieResultRow — общая шапка (постер+инфо), её не трогаем: тот же
-    компонент используют результаты ГЛОБАЛЬНОГО поиска (renderSearchResultRow)
-    — у них тоже есть своя стрелка «Подробнее», но вся строка НЕ кликабельна
-    (цель добавления заранее не известна, там только меню «Добавить в…»). */
+    известна из state.room) — как и везде по сервису, клик по самой карточке
+    открывает подробности (openMovieInfoModal), а быстрое действие — своя
+    кнопка сверху: тут это «+» (добавляет в текущую комнату сразу, без похода
+    в подробности — именно ради этого и открыта эта модалка). Раньше клик по
+    всей карточке добавлял фильм напрямую, а стрелка открывала подробности —
+    поведение развернули ради единообразия с остальными списками (плитка
+    витрины, строка глобального поиска — везде клик = подробности, действия
+    своими кнопками). Настоящий <button> для всей карточки не подходит:
+    внутри есть свой icon-btn «+», а <button> в <button> невалиден — поэтому
+    div с role="button"/tabindex + свой keydown на Enter/Space. */
 function renderMovieResultCard(mv) {
   const card = el("div", "movie-card movie-card-pick");
   card.setAttribute("role", "button");
   card.tabIndex = 0;
 
   const head = renderMovieResultRow(mv);
-  const moreBtn = el("button", "icon-btn xs");
-  moreBtn.type = "button";
-  moreBtn.dataset.act = "more";
-  moreBtn.title = "Подробнее";
-  moreBtn.setAttribute("aria-label", "Подробнее");
-  moreBtn.innerHTML = CHEVRON_DOWN_ICON;
-  // stopPropagation — клик по стрелке не должен всплывать до card.onclick и
-  // триггерить добавление фильма (карточка кликабельна целиком, см. ниже).
-  moreBtn.onclick = e => { e.stopPropagation(); openMovieInfoModal(mv); };
-  head.append(moreBtn);
+  const addBtn = el("button", "icon-btn xs");
+  addBtn.type = "button";
+  addBtn.title = "Добавить в комнату";
+  addBtn.setAttribute("aria-label", "Добавить в комнату");
+  addBtn.innerHTML = PLUS_ICON;
+  // stopPropagation — клик по «+» не должен всплывать до card.onclick и
+  // открывать подробности заодно с добавлением.
+  addBtn.onclick = e => {
+    e.stopPropagation();
+    act(async () => {
+      const roomId = state.room.room.id;
+      const r = await api(`/rooms/${roomId}/movies`, { method: "POST", body: { kinopoiskId: mv.kinopoiskId } });
+      closeModal("addMovieModalBackdrop");
+      await openRoom(roomId);
+      return r;
+    }, "Фильм добавлен");
+  };
+  head.append(addBtn);
   card.append(head);
 
-  const addMovie = () => act(async () => {
-    const roomId = state.room.room.id;
-    const r = await api(`/rooms/${roomId}/movies`, { method: "POST", body: { kinopoiskId: mv.kinopoiskId } });
-    closeModal("addMovieModalBackdrop");
-    await openRoom(roomId);
-    return r;
-  }, "Фильм добавлен");
-  card.onclick = addMovie;
+  const openInfo = () => openMovieInfoModal(mv);
+  card.onclick = e => { if (!e.target.closest("button")) openInfo(); };
   card.addEventListener("keydown", e => {
     if (e.target.closest("button")) return;
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); addMovie(); }
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openInfo(); }
   });
 
   return card;
@@ -844,9 +869,10 @@ function renderMovieResults(movies) {
     остальное через прокрутку), чтобы не разъезжаться на пол-экрана при
     большом числе комнат. Один и тот же компонент используется в пункте
     «Добавить в комнату» меню карточки личного списка (renderMyListInto) и
-    меню renderAddToMenu (плитка витрины, строка результата глобального
-    поиска, модалка «Фильм»). onAdded(roomId) зовётся ПОСЛЕ успешного
-    добавления — вызывающий код решает, как известить пользователя. */
+    меню renderAddToMenu (плитка витрины, модалка «Фильм» — единственное
+    место, где теперь есть выбор комнаты у результатов поиска, см. план
+    задачи «обновим вёрстку на главной»). onAdded(roomId) зовётся ПОСЛЕ
+    успешного добавления — вызывающий код решает, как известить пользователя. */
 function renderRoomPicker(container, kinopoiskId, rooms, onAdded) {
   container.textContent = "";
   if (!rooms.length) {
@@ -866,30 +892,26 @@ function renderRoomPicker(container, kinopoiskId, rooms, onAdded) {
   container.append(list);
 }
 
-/** Строка результата глобального поиска (шапка, любая комната) — та же
-    шапка постер+инфо, что и у карточки локального поиска
-    (renderMovieResultRow), плюс своя стрелка «Подробнее» (открывает модалку
-    «Фильм» — openMovieInfoModal) и компактное меню «Добавить в…»
-    (renderAddToMenu) — комната заранее не известна, поэтому вся строка НЕ
-    кликабельна целиком (в отличие от renderMovieResultCard): добавление
-    только через меню, где нужно выбрать цель. */
-function renderSearchResultRow(mv, rooms) {
-  const wrap = el("div", "movie-card");
-  const head = renderMovieResultRow(mv);
+/** Строка результата поиска — общая для шапки (глобальный поиск) и главной
+    (поиск на главной): та же шапка постер+инфо, что и у карточки локального
+    поиска в комнате (renderMovieResultRow), но без своих кнопок действий —
+    комната заранее не известна, поэтому «Отметить просмотренным»/«Добавить
+    в…» доступны только через модалку «Фильм» (её собственное меню в шапке,
+    см. renderMovieInfoModal), которую открывает клик по всей строке — тот
+    же приём, что и у .movie-card-pick (renderMovieResultCard), только тут
+    строка ведёт к подробностям, а не к добавлению. */
+function renderSearchResultRow(mv) {
+  const wrap = el("div", "movie-card movie-card-pick");
+  wrap.setAttribute("role", "button");
+  wrap.tabIndex = 0;
+  wrap.append(renderMovieResultRow(mv));
 
-  const moreBtn = el("button", "icon-btn xs");
-  moreBtn.type = "button";
-  moreBtn.dataset.act = "more";
-  moreBtn.title = "Подробнее";
-  moreBtn.setAttribute("aria-label", "Подробнее");
-  moreBtn.innerHTML = CHEVRON_DOWN_ICON;
-  moreBtn.onclick = () => openMovieInfoModal(mv);
+  const openInfo = () => openMovieInfoModal(mv);
+  wrap.onclick = openInfo;
+  wrap.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openInfo(); }
+  });
 
-  const headActions = el("div", "movie-card-head-actions");
-  headActions.append(moreBtn, renderAddToMenu(mv.kinopoiskId, rooms));
-  head.append(headActions);
-
-  wrap.append(head);
   return wrap;
 }
 
@@ -1009,8 +1031,6 @@ function openRateModal(kinopoiskId, currentScore, onRated) {
   openModal("rateModalBackdrop");
 }
 
-const CHEVRON_DOWN_ICON = '<svg class="icon chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
-
 // Меню действий карточки очереди/истории (три точки в правом верхнем углу) —
 // «Отметить просмотренным»/«Убрать из комнаты» (очередь) и «Вернуть в
 // очередь» (история) переехали сюда из отдельных кнопок (см. планы задач
@@ -1107,13 +1127,15 @@ function renderCardMenu(items, opts = {}) {
 }
 
 /** Меню действий с фильмом — компактная замена ВСЕГДА-видимого
-    renderRoomPicker для мест, где место ЖАЛКО (узкая плитка/список
-    результатов): плитка витрины (renderMovieTile), строка результата
-    глобального поиска (renderSearchResultRow) и модалка «Фильм»
-    (renderMovieInfoModal, там же раньше стояла отдельная кнопка
-    «Отметить просмотренным» рядом со шкалой оценки — перенесена сюда,
-    в дропдаун, вместо своей кнопки везде, где это меню используется). «В
-    личный список» — сразу выполняет действие (POST /my-list), «Добавить в
+    renderRoomPicker для мест, где место ЖАЛКО (узкая плитка) и для модалки
+    «Фильм»: плитка витрины (renderMovieTile) и модалка (renderMovieInfoModal,
+    там же раньше стояла отдельная кнопка «Отметить просмотренным» рядом со
+    шкалой оценки — перенесена сюда, в дропдаун). Строки поиска
+    (renderSearchResultRow) это меню больше НЕ используют — весь смысл
+    строки поиска в том, что комната заранее не известна, поэтому там нет
+    вообще никаких кнопок, только клик по строке в модалку, где это меню и
+    доступно (см. план задачи «обновим вёрстку на главной»). «В личный
+    список» — сразу выполняет действие (POST /my-list), «Добавить в
     комнату» подменяет содержимое .menu на renderRoomPicker (select комнат +
     кнопка) — сам пикер, без второй кнопки личного списка, она отдельным
     пунктом уровнем выше. Заголовок по умолчанию («Действия с фильмом» —
@@ -1618,10 +1640,12 @@ $("importKinopoiskSubmitBtn").onclick = async () => {
 // что здесь некуда «раздвинуть» страницу под результаты — шапка одна на
 // весь сервис, поверх любого экрана, поэтому результаты — не часть потока
 // страницы, а выпадающая панель (.header-search-results, position:absolute
-// от .header-search, см. styles.css), которая закрывается кликом снаружи,
-// Escape или переходом на другой экран (hashchange). У каждого результата
-// — компактное меню «Добавить в…» (renderAddToMenu), комната заранее не
-// известна.
+// от .header-search, ширина ровно как у поля — см. styles.css), которая
+// закрывается кликом снаружи, Escape или переходом на другой экран
+// (hashchange). Каждая строка результата целиком кликабельна и открывает
+// #movieInfoModalBackdrop (renderSearchResultRow) — там и «Отметить
+// просмотренным», и «Добавить в…» (комната заранее не известна, поэтому не
+// на самой строке — см. план задачи «обновим вёрстку на главной»).
 // На узком экране (см. @media(max-width:30rem) в styles.css) поле+иконки
 // шапки в один ряд не помещаются даже ужатыми — там виден только сам
 // значок-лупа, а разворот на всю ширину шапки идёт через явный класс
@@ -1680,17 +1704,15 @@ async function runGlobalSearch() {
   // подсовываем результат уже не тому вводу (та же защита, что у
   // runHomeSearch).
   if ($("globalSearchInput").value.trim() !== q) return;
-  const roomsData = await act(() => api("/rooms"));
-  renderGlobalSearchResults(data.movies, roomsData ? roomsData.rooms : []);
+  renderGlobalSearchResults(data.movies);
 }
 
-function renderGlobalSearchResults(movies, rooms) {
+function renderGlobalSearchResults(movies) {
   const box = $("globalSearchResults");
   box.textContent = "";
   box.hidden = false;
-  openCardMenu = null; // старые строки со своими меню «Добавить в…» уходят целиком
   if (!movies.length) { box.append(el("p", "muted", "Ничего не нашлось.")); return; }
-  for (const mv of movies) box.append(renderSearchResultRow(mv, rooms));
+  for (const mv of movies) box.append(renderSearchResultRow(mv));
 }
 
 $("renameRoomBtn").onclick = () => act(async () => {
@@ -2557,9 +2579,11 @@ function renderWatchedInto(container, items) {
 
 // ───────────────────────── личный список на просмотр ─────────────────────────
 // Глобально, без привязки к комнате (см. план задачи 1) — GET/POST/DELETE
-// /api/my-list. Добавляют сюда через глобальный поиск в шапке (см.
-// renderSearchResultRow выше); открыть на Кинопоиске, убрать из списка или
-// закинуть в конкретную комнату — всё через саму карточку (renderMyListInto).
+// /api/my-list. Добавляют сюда через модалку «Фильм» (её меню
+// renderAddToMenu, «В личный список» — открывается кликом по строке
+// глобального поиска в шапке или на главной, см. renderSearchResultRow);
+// открыть на Кинопоиске, убрать из списка или закинуть в конкретную комнату
+// — всё через саму карточку (renderMyListInto).
 async function showMyList() {
   showOnly("myListView");
   document.title = "Что смотрим? — мой список";
