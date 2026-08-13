@@ -60,6 +60,7 @@
       </button>
       <div class="menu" id="accountMenu" hidden>
         <div class="menu-user"><b id="accountMenuName">—</b><span class="muted" id="accountMenuMeta"></span></div>
+        <button class="menu-item" id="accountMenuTour">Показать обучение</button>
         <button class="menu-item" id="accountMenuManage">Управление аккаунтом →</button>
         <button class="menu-item danger" id="accountMenuLogout">Выйти</button>
       </div>
@@ -94,7 +95,7 @@
        bindModal("joinRoomModalBackdrop",...) в app.js); сами поля и
        обработчики (#newRoomTitle/#createRoomBtn, #joinCodeInput/#joinCodeBtn)
        никуда не делись, просто переехали внутрь модалок ниже. -->
-  <div class="room-actions-row">
+  <div class="room-actions-row" id="roomActionsRow">
     <button class="btn filled" id="createRoomOpenBtn" type="button">Создать комнату</button>
     <button class="btn outlined" id="joinRoomOpenBtn" type="button">Присоединиться к комнате</button>
   </div>
@@ -214,6 +215,9 @@
   <div class="title-row">
     <h1>Мои фильмы</h1>
     <div class="title-actions">
+      <!-- disabled/чип «Скоро будет» навешиваются из app.js по флагу
+           IMPORT_ENABLED (см. там) — сама разметка кнопки не меняется между
+           выключенным и включённым состоянием. -->
       <button class="btn tonal sm" id="importBtn" type="button">Импорт</button>
     </div>
   </div>
@@ -509,6 +513,14 @@
 </section>
 
 </div>
+
+<!-- Пошаговое обучение (#tourSpotlight/#tourTooltip) — целиком строится в
+     app.js (buildTourDom), своей статической разметки тут нет: элементы
+     нужны только на время самого тура и пересоздаются при каждом запуске
+     (см. комментарий у buildTourDom — так обошли баг, при котором браузер
+     не пересчитывал geometry у fixed-элемента, скрытого [hidden] с самой
+     загрузки страницы, даже после снятия hidden и явной установки
+     width/height). -->
 
 <div id="snack" role="status" aria-live="polite"></div>
 

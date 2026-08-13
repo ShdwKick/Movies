@@ -229,6 +229,7 @@ async function showRooms() {
   state.rooms = data.rooms;
   renderRooms();
   refreshShowcase(state.rooms);
+  maybeStartTour();
 }
 
 /** Общая точка входа для витрины «Из базы» — решает, есть ли вообще жанры (а
@@ -1495,10 +1496,23 @@ document.addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
   closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCardMenu(); closeGlobalSearch();
   if (openModalId) closeModal(openModalId);
+  if (tourActive()) endTour();
 });
 
 $("accountMenuManage").onclick = () => { closeAccountMenu(); window.open(auth.accountUrl(), "_blank", "noopener"); };
 $("accountMenuLogout").onclick = () => { closeAccountMenu(); auth.logout(); };
+$("accountMenuTour").onclick = () => {
+  closeAccountMenu();
+  // Шаги обучения показывают только элементы главной — если сейчас другой
+  // экран (комната/watched/…), сперва уводим на «#/» и даём route() время
+  // отрисоваться, иначе цели первых шагов просто не найдутся (см. tourStepVisible).
+  if (location.hash !== "#/" && location.hash !== "") {
+    location.hash = "#/";
+    setTimeout(startTour, 300);
+  } else {
+    startTour();
+  }
+};
 
 // ───────────────────────── модалки (участники, добавление фильма) ─────────────────────────
 // Общий паттерн для двух модалок ниже: подложка на весь экран + карточка по
@@ -1556,6 +1570,21 @@ async function postCsv(path, text) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, data);
   return data;
+}
+
+// Выключено до публикации расширения «Что смотрим: импорт с Кинопоиска»
+// (см. KinopoiskImport/ — сейчас доступно только через «load unpacked» в
+// режиме разработчика, обычным пользователям не поставить). IMDb-часть сама
+// по себе уже рабочая и от расширения не зависит, но раз просили спрятать
+// «Импорт» целиком одной кнопкой — выключаем оба сразу, а не только
+// Кинопоиск, чтобы не путать наполовину активной кнопкой. Реактивация —
+// один флаг, разметку/остальной код трогать не нужно.
+const IMPORT_ENABLED = false;
+if (!IMPORT_ENABLED) {
+  const btn = $("importBtn");
+  btn.disabled = true;
+  btn.title = "Скоро будет";
+  btn.append(el("span", "chip", "Скоро будет"));
 }
 
 bindModal("importModalBackdrop", null, "importModalClose");
@@ -2694,6 +2723,243 @@ function renderMyListInto(container, items, onChange) {
     ]);
     container.append(renderMovieTile(mv, { menu, onChange }));
   }
+}
+
+// ───────────────────────── пошаговое обучение ─────────────────────────
+// Автозапуск один раз для новых пользователей (localStorage-флаг —
+// per-браузер, не per-аккаунт: сознательно, своего профиля настроек у
+// сервиса нет, а заводить это ради одного флага избыточно). Флаг ставится
+// СРАЗУ при автозапуске (maybeStartTour), а не по завершении — иначе уход
+// с середины (клик по комнате, переход по ссылке) показывал бы тур заново
+// при каждом следующем визите. Повторно посмотреть — «Показать обучение» в
+// меню аккаунта (accountMenuTour выше), тот всегда стартует независимо от
+// флага. Все цели шагов — статичная разметка главной, которая есть у любого
+// пользователя сразу после входа, даже без единой комнаты/фильма в кэше
+// (жанровые полки/витрину «Из базы» намеренно не подсвечиваем — у нового
+// пользователя там пока пусто, см. tourStepVisible).
+const TOUR_DONE_KEY = "movies.tour.done";
+const TOUR_STEPS = [
+  {
+    title: "Добро пожаловать в «Что смотрим»",
+    text: "Покажем в нескольких шагах, что где лежит — это займёт меньше минуты. В любой момент можно закрыть крестиком или Esc.",
+  },
+  {
+    target: () => $("roomActionsRow"),
+    title: "Комнаты",
+    text: "Комната — общий список фильмов с друзьями: очередь, история просмотров и совместный выбор, что смотреть. Создайте свою или присоединитесь по коду приглашения.",
+  },
+  {
+    target: () => $("homeSearchWrap"),
+    title: "Поиск фильмов",
+    text: "Ищите фильм по названию и сразу добавляйте в комнату или в свой личный список — без похода на отдельный экран.",
+  },
+  {
+    target: () => $("globalSearchWrap"),
+    title: "Поиск в любом месте",
+    text: "Тот же поиск есть в шапке — доступен с любого экрана сервиса, не только с главной.",
+  },
+  {
+    target: () => $("serviceProfileBtn"),
+    title: "Мои фильмы",
+    text: "Здесь — что вы уже посмотрели и что хотите посмотреть, отдельно от комнат: оценки, история и личный список.",
+  },
+  {
+    target: () => $("accountMenuWrap"),
+    title: "Аккаунт и тема",
+    text: "Тема оформления и аккаунт — здесь же. Это обучение можно открыть снова через это меню, если понадобится.",
+  },
+  {
+    title: "Готово",
+    text: "Теперь вы знаете, что где искать. Приятного просмотра.",
+  },
+];
+
+let tourStepIndex = -1; // -1 — тур не запущен
+let tourReposition = null; // текущий обработчик resize/scroll, снимается в endTour
+let tourEls = null;        // {spotlight, tooltip, stepLabel, title, text, backBtn, nextBtn} — см. buildTourDom
+
+function tourActive() { return tourStepIndex >= 0; }
+
+/** Строит DOM тура заново при каждом запуске и полностью удаляет его в
+    endTour(), а не переиспользует статический узел через hidden (как
+    остальные модалки в этом файле). Так обошли живьём обнаруженный баг:
+    у #tourSpotlight/#tourTooltip, существовавших в разметке со старта
+    страницы под [hidden], после снятия hidden И явной установки
+    width/height инлайн-стилями offsetWidth/getBoundingClientRect
+    продолжали отдавать 0 — при том, что те же самые width/height у
+    СВЕЖЕСОЗДАННОГО через document.createElement узла считались верно сразу
+    же. Пересоздание при каждом запуске — самый надёжный обход, а тур и так
+    не настолько частая операция, чтобы экономить на пересборке DOM. */
+function buildTourDom() {
+  const spotlight = el("div");
+  spotlight.id = "tourSpotlight";
+
+  const tooltip = el("div");
+  tooltip.id = "tourTooltip";
+  tooltip.setAttribute("role", "dialog");
+  tooltip.setAttribute("aria-modal", "true");
+  tooltip.innerHTML = `
+    <button class="icon-btn xs" type="button" title="Пропустить" aria-label="Пропустить обучение">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div class="muted tour-step-label"></div>
+    <h3></h3>
+    <p></p>
+    <div class="tour-actions">
+      <button class="btn" type="button">Назад</button>
+      <button class="btn filled" type="button">Далее</button>
+    </div>`;
+  document.body.append(spotlight, tooltip);
+
+  const closeBtn = tooltip.querySelector(".icon-btn");
+  const [backBtn, nextBtn] = tooltip.querySelectorAll(".tour-actions .btn");
+  closeBtn.onclick = endTour;
+  backBtn.onclick = tourPrev;
+  nextBtn.onclick = tourNext;
+
+  return {
+    spotlight, tooltip, backBtn, nextBtn,
+    stepLabel: tooltip.querySelector(".tour-step-label"),
+    title: tooltip.querySelector("h3"),
+    text: tooltip.querySelector("p"),
+  };
+}
+
+/** Шаг без target — всегда «видим» (приветствие/прощание, показываются по
+    центру экрана). Шаг с target — виден, только если элемент существует и
+    реально занимает место на экране (не hidden где-то выше по дереву, не
+    свёрнут в 0×0) — тот же смысл, что у обычных .hidden-проверок в остальном
+    коде, просто через getBoundingClientRect, а не сам DOM-атрибут: элемент
+    технически присутствует всегда, скрывает его родительский <section>. */
+function tourStepVisible(step) {
+  if (!step.target) return true;
+  const el = step.target();
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
+}
+
+function tourFindVisible(from, dir) {
+  let i = from;
+  while (i >= 0 && i < TOUR_STEPS.length && !tourStepVisible(TOUR_STEPS[i])) i += dir;
+  return i;
+}
+
+/** Позиционирует и подсветку, и подсказку под текущий tourStepIndex — общая
+    точка, на которую опираются старт/далее/назад/resize/scroll: она ничего
+    не решает про смену шага, только рисует уже выбранный. */
+function tourRender() {
+  const step = TOUR_STEPS[tourStepIndex];
+  const targetEl = step.target ? step.target() : null;
+  const { spotlight, tooltip, stepLabel, title, text, backBtn, nextBtn } = tourEls;
+
+  let targetRect = null;
+  if (targetEl) {
+    spotlight.classList.remove("tour-no-target");
+    const pad = 8;
+    const r = targetEl.getBoundingClientRect();
+    spotlight.style.left = `${r.left - pad}px`;
+    spotlight.style.top = `${r.top - pad}px`;
+    spotlight.style.width = `${r.width + pad * 2}px`;
+    spotlight.style.height = `${r.height + pad * 2}px`;
+    targetRect = r;
+  } else {
+    spotlight.classList.add("tour-no-target");
+    spotlight.style.left = "0px";
+    spotlight.style.top = "0px";
+    spotlight.style.width = "0px";
+    spotlight.style.height = "0px";
+  }
+
+  stepLabel.textContent = `Шаг ${tourStepIndex + 1} из ${TOUR_STEPS.length}`;
+  title.textContent = step.title;
+  text.textContent = step.text;
+  backBtn.hidden = tourFindVisible(tourStepIndex - 1, -1) < 0;
+  nextBtn.textContent = tourFindVisible(tourStepIndex + 1, 1) >= TOUR_STEPS.length ? "Готово" : "Далее";
+
+  // Подсказку меряем ПОСЛЕ того, как проставили контент (высота зависит от
+  // текста) — margin от края подсвеченного элемента, с проверкой краёв
+  // экрана; без цели — просто по центру.
+  const margin = 16;
+  const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+  let left, top;
+  if (!targetRect) {
+    left = (innerWidth - tw) / 2;
+    top = (innerHeight - th) / 2;
+  } else {
+    top = targetRect.bottom + margin + 8; // +8 — с учётом внешнего отступа подсветки
+    if (top + th > innerHeight - margin) top = targetRect.top - th - margin - 8;
+    if (top < margin) top = Math.max(margin, (innerHeight - th) / 2);
+    left = targetRect.left + targetRect.width / 2 - tw / 2;
+    left = Math.min(Math.max(left, margin), innerWidth - tw - margin);
+  }
+  // Финальная защита от промаха мимо экрана — top/left в любом случае
+  // зажаты в границы вьюпорта, независимо от ветки выше.
+  left = Math.min(Math.max(left, margin), Math.max(margin, innerWidth - tw - margin));
+  top = Math.min(Math.max(top, margin), Math.max(margin, innerHeight - th - margin));
+  tooltip.style.left = `${Math.round(left)}px`;
+  tooltip.style.top = `${Math.round(top)}px`;
+}
+
+function tourGo(index) {
+  tourStepIndex = index;
+  tourRender();
+}
+
+function tourNext() {
+  const i = tourFindVisible(tourStepIndex + 1, 1);
+  if (i >= TOUR_STEPS.length) { endTour(); return; }
+  tourGo(i);
+}
+function tourPrev() {
+  const i = tourFindVisible(tourStepIndex - 1, -1);
+  if (i < 0) return;
+  tourGo(i);
+}
+
+function startTour() {
+  if (tourActive()) return;
+  // Фоновая/невидимая вкладка отдаёт innerWidth/innerHeight нулями (сама
+  // раскладка ещё не посчитана браузером, ему незачем это делать для того,
+  // что не рисуется) — подсветка/подсказка тогда съехали бы в угол экрана.
+  // Ждём реального возврата видимости вместо того, чтобы рисовать по
+  // мусорным размерам.
+  if (document.hidden) {
+    document.addEventListener("visibilitychange", function onVisible() {
+      if (document.hidden) return;
+      document.removeEventListener("visibilitychange", onVisible);
+      startTour();
+    });
+    return;
+  }
+  const first = tourFindVisible(0, 1);
+  if (first >= TOUR_STEPS.length) return; // теоретически недостижимо — шаги 0 и последний без target
+  tourEls = buildTourDom();
+  tourGo(first);
+  tourReposition = () => tourRender();
+  addEventListener("resize", tourReposition);
+  addEventListener("scroll", tourReposition, true);
+}
+
+function endTour() {
+  if (!tourActive()) return;
+  tourStepIndex = -1;
+  if (tourEls) {
+    tourEls.spotlight.remove();
+    tourEls.tooltip.remove();
+    tourEls = null;
+  }
+  if (tourReposition) {
+    removeEventListener("resize", tourReposition);
+    removeEventListener("scroll", tourReposition, true);
+    tourReposition = null;
+  }
+}
+
+function maybeStartTour() {
+  if (localStorage.getItem(TOUR_DONE_KEY)) return;
+  localStorage.setItem(TOUR_DONE_KEY, "1");
+  setTimeout(startTour, 400);
 }
 
 init().catch(e => {

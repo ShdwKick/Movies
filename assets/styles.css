@@ -868,6 +868,45 @@ ul.plain li:last-child{border-bottom:0}
   .wheel-wrap svg,.wheel-wrap svg path,.reel-track,.draw-start-btn{transition:none}
 }
 
+/* ===================== ПОШАГОВОЕ ОБУЧЕНИЕ ===================== */
+/* Подсветка — приём «дырка через box-shadow», как у .modal-backdrop, только
+   тут сама «дырка» — прямоугольник вокруг текущего элемента, а не весь экран:
+   #tourSpotlight САМ по себе прозрачный и без фона, вся темнота — это его
+   box-shadow наружу на 9999px. Позиция/размер — инлайн-стилями из JS
+   (getBoundingClientRect целевого элемента + отступ), тут только форма и
+   переход между шагами. pointer-events:none — сквозь подсветку должно быть
+   видно элемент, но не обязательно кликабельно (за темой не гонимся, тур
+   ведёт кнопками, а не кликом по подсвеченному). */
+#tourSpotlight{
+  position:fixed;z-index:100;pointer-events:none;
+  border-radius:var(--md-sys-shape-corner-l);
+  box-shadow:0 0 0 9999px rgba(0,0,0,.6),0 0 0 2px var(--md-sys-color-primary);
+  transition:left .25s var(--ease-std),top .25s var(--ease-std),
+             width .25s var(--ease-std),height .25s var(--ease-std),opacity .2s;
+}
+/* Шаг без цели (приветствие/прощание) — просто затемнение на весь экран, без
+   рамки-подсветки (дырка нулевого размера читалась бы как артефакт). */
+#tourSpotlight.tour-no-target{box-shadow:0 0 0 9999px rgba(0,0,0,.6)}
+
+#tourTooltip{
+  position:fixed;z-index:101;width:22rem;max-width:calc(100vw - 2rem);
+  background:var(--md-sys-color-surface-container-low);
+  border-radius:var(--md-sys-shape-corner-xl);
+  padding:1.1rem 1.3rem 1.3rem;box-shadow:var(--e2);
+  transition:left .25s var(--ease-std),top .25s var(--ease-std);
+}
+#tourTooltip #tourCloseBtn{position:absolute;top:.5rem;right:.5rem}
+.tour-step-label{font-size:12px;font-weight:600;letter-spacing:.02em;text-transform:uppercase}
+#tourTooltip h3{margin:.3rem 1.6rem .4rem 0;font-size:17px}
+#tourTooltip p{margin:0;color:var(--md-sys-color-on-surface-variant);line-height:1.5}
+.tour-actions{display:flex;justify-content:flex-end;gap:.5rem;margin-top:1.1rem}
+/* «Назад» спрятана на первом шаге через [hidden] из JS, а не отрисовкой —
+   тот же приём переиспользуемых DOM-узлов, что и у модалок в этом файле. */
+
+@media(max-width:26rem){
+  #tourTooltip{width:calc(100vw - 2rem)}
+}
+
 /* ===================== ДОСТУПНОСТЬ ===================== */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{
