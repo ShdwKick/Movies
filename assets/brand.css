@@ -146,6 +146,16 @@
   14% { opacity:.85 }
   100%{ transform:translate3d(calc(var(--bh-drift,1rem) * 6), -30vh, 0) scale(.3); opacity:0 }
 }
+/* админка: вспыхивают дискретно и строго вертикально — телеметрия, а не огонь */
+.bh-sparks--pulse .bh-spark{ animation-name:bh-pulse; animation-timing-function:steps(1,end) }
+@keyframes bh-pulse{
+  0%  { transform:translate3d(0,0,0) scale(.7); opacity:0 }
+  8%  { opacity:.9 }
+  50% { opacity:.25 }
+  58% { opacity:.9 }
+  92% { opacity:.9 }
+  100%{ transform:translate3d(0,-60vh,0) scale(.7); opacity:0 }
+}
 
 /* ═══ ЗНАК ═══
    Градиент объявляется ВНУТРИ каждого <svg>: вынесенный наружу не увидит
