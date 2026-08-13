@@ -327,10 +327,7 @@ async function renderCachedMovies(rooms) {
   openCardMenu = null; // старые плитки со своими меню-«…» уходят целиком
   if (!data.movies.length) box.append(el("p", "muted", "По этому жанру пока пусто."));
   for (const mv of data.movies) {
-    box.append(renderMovieTile(mv, {
-      menu: renderAddToMenu(mv.kinopoiskId, rooms),
-      rating: { kinopoiskId: mv.kinopoiskId, score: mv.myScore },
-    }));
+    box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv.kinopoiskId, rooms) }));
   }
 
   // Пейджер прячется целиком, если всё помещается на одну страницу — но
@@ -408,10 +405,7 @@ function renderGenreShelf(genre, movies, rooms) {
 
   const row = el("div", "genre-shelf-row");
   for (const mv of movies) {
-    row.append(renderMovieTile(mv, {
-      menu: renderAddToMenu(mv.kinopoiskId, rooms),
-      rating: { kinopoiskId: mv.kinopoiskId, score: mv.myScore },
-    }));
+    row.append(renderMovieTile(mv, { menu: renderAddToMenu(mv.kinopoiskId, rooms) }));
   }
   section.append(row);
   return section;
@@ -529,13 +523,6 @@ function renderMovieTile(mv, opts = {}) {
       </div>
     </div>`;
 
-  const openInfo = () => openMovieInfoModal(mv);
-  tile.onclick = e => { if (!e.target.closest("button")) openInfo(); };
-  tile.addEventListener("keydown", e => {
-    if (e.target.closest("button")) return;
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openInfo(); }
-  });
-
   const posterWrap = tile.querySelector(".movie-tile-poster-wrap");
   // Меню действий — бейджем в ВЕРХНЕМ правом углу поверх обложки (см.
   // .movie-tile-poster-wrap .menu-wrap в styles.css), renderCardMenu уже
@@ -547,11 +534,36 @@ function renderMovieTile(mv, opts = {}) {
   // реально есть (её не поставить с компактной карточки, это делают через
   // звёзды в модалке «Фильм» — renderMovieInfoModal; кружок тут просто
   // показывает уже стоящее число и даёт быстро его поменять/снять через
-  // openRateModal).
-  if (opts.rating && opts.rating.score) {
-    const badge = renderRatingBadge(opts.rating.kinopoiskId, opts.rating.score, score => { mv.myScore = score; });
-    posterWrap.append(badge);
-  }
+  // openRateModal). mv.myScore — единственный источник правды (а не снимок в
+  // opts на момент рендера): syncRatingBadge() пересобирает бейдж заново по
+  // текущему значению, поэтому её же можно звать и после того, как оценку
+  // поставили/сняли/поменяли в модалке «Фильм» — плитка обновится на месте,
+  // не дожидаясь перезагрузки всего экрана (см. openInfo ниже).
+  let badge = null;
+  const syncRatingBadge = () => {
+    if (badge) { badge.remove(); badge = null; }
+    if (mv.myScore) {
+      badge = renderRatingBadge(mv.kinopoiskId, mv.myScore, score => { mv.myScore = score; });
+      posterWrap.append(badge);
+    }
+  };
+  syncRatingBadge();
+
+  // opts.onChange — для мест, где просмотр/оценка из модалки «Фильм» может
+  // изменить состав ИМЕННО этого списка (напр. «Отметить просмотренным» в
+  // комнате переносит фильм из очереди в историю — см. renderMovieCard) —
+  // необязателен: витрине/жанровым полкам/«Что мы смотрели» состав менять
+  // неоткуда (это не queue/watched-разделение), там достаточно
+  // syncRatingBadge() без полной перезагрузки.
+  const openInfo = () => openMovieInfoModal(mv, () => {
+    syncRatingBadge();
+    if (opts.onChange) opts.onChange();
+  });
+  tile.onclick = e => { if (!e.target.closest("button")) openInfo(); };
+  tile.addEventListener("keydown", e => {
+    if (e.target.closest("button")) return;
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openInfo(); }
+  });
 
   const watchBtn = el("button", "icon-btn xs");
   watchBtn.type = "button";
@@ -579,8 +591,13 @@ function renderMovieTile(mv, opts = {}) {
     есть весь контент модалки), и внизу рядом друг с другом «Смотреть»/
     «Страница на Кинопоиске» (.movie-info-actions).
     Меню «Добавить в…» — по-прежнему в шапке модалки рядом с крестиком
-    закрытия (см. ниже #movieInfoModalMenuWrap), не над постером. */
-function renderMovieInfoModal(mv, rooms) {
+    закрытия (см. ниже #movieInfoModalMenuWrap), не над постером.
+    onChange (необязателен) — зовётся сразу после того, как что-то в модалке
+    реально поменялось (оценка звёздами, «Отметить просмотренным», «Добавить
+    в комнату/список»): карточка, с которой модалку открыли, реагирует сразу
+    же, не дожидаясь закрытия модалки и тем более следующей полной
+    перезагрузки экрана — см. renderMovieTile/openMovieInfoModal выше. */
+function renderMovieInfoModal(mv, rooms, onChange) {
   const year = mv.year ? ` (${mv.year})` : "";
   $("movieInfoModalTitle").textContent = `${mv.title}${year}`;
   const body = $("movieInfoModalBody");
@@ -605,8 +622,14 @@ function renderMovieInfoModal(mv, rooms) {
 
   // onRated не перерисовывает chip-row/avgScore здесь — сервер пересчитает
   // среднюю только при следующей полной загрузке данных (та же логика, что
-  // раньше была у карточки истории, просто перенесённая в модалку).
-  renderStarRating(body.querySelector('[data-act="myRating"]'), mv.kinopoiskId, mv.myScore, score => { mv.myScore = score; });
+  // раньше была у карточки истории, просто перенесённая в модалку). mv —
+  // тот же объект, что держит вызвавшая карточка, поэтому mv.myScore = score
+  // уже видно снаружи; onChange() досылает карточке сигнал перерисовать
+  // СВОЙ бейдж оценки прямо сейчас, а не по следующей загрузке экрана.
+  renderStarRating(body.querySelector('[data-act="myRating"]'), mv.kinopoiskId, mv.myScore, score => {
+    mv.myScore = score;
+    if (onChange) onChange();
+  });
 
   const roles = [];
   if (mv.director) roles.push(`<p><b>Режиссёр:</b> ${esc(mv.director)}</p>`);
@@ -623,7 +646,7 @@ function renderMovieInfoModal(mv, rooms) {
   // ним просто некуда раскрыть .menu, не вылезая за левый край окна.
   const menuWrapBox = $("movieInfoModalMenuWrap");
   menuWrapBox.textContent = "";
-  menuWrapBox.append(renderAddToMenu(mv.kinopoiskId, rooms));
+  menuWrapBox.append(renderAddToMenu(mv.kinopoiskId, rooms, onChange));
   body.querySelector("#movieInfoWatchBtn").onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
   body.querySelector("#movieInfoKpBtn").onclick = () => window.open(kinopoiskRuUrl(mv.kinopoiskId), "_blank", "noopener");
 }
@@ -639,7 +662,7 @@ function renderMovieInfoModal(mv, rooms) {
     повторное открытие той же карточки в этой сессии фронта уже не ходило в
     сеть. Список комнат для «Добавить в…» в шапке модалки — свежий при
     каждом открытии (могли создать комнату в другой вкладке). */
-async function openMovieInfoModal(mv) {
+async function openMovieInfoModal(mv, onChange) {
   const hasSomething = mv.director || (mv.actors && mv.actors.length) || mv.description;
   if (!hasSomething && !mv.__detailsLoaded) {
     const data = await act(() => api(`/movies/${mv.kinopoiskId}`));
@@ -648,7 +671,7 @@ async function openMovieInfoModal(mv) {
     mv.__detailsLoaded = true;
   }
   const roomsData = await act(() => api("/rooms"));
-  renderMovieInfoModal(mv, roomsData ? roomsData.rooms : []);
+  renderMovieInfoModal(mv, roomsData ? roomsData.rooms : [], onChange);
   openModal("movieInfoModalBackdrop");
 }
 
@@ -1140,15 +1163,39 @@ function renderCardMenu(items, opts = {}) {
     кнопка) — сам пикер, без второй кнопки личного списка, она отдельным
     пунктом уровнем выше. Заголовок по умолчанию («Действия с фильмом» —
     см. renderCardMenu) тут ничем не переопределяем: раньше был «Добавить
-    в…», но с «Отметить просмотренным» внутри это уже не только добавление. */
-function renderAddToMenu(kinopoiskId, rooms) {
+    в…», но с «Отметить просмотренным» внутри это уже не только добавление.
+    Каждый пункт сам закрывает меню (closeCardMenu()) после действия — раньше
+    «Отметить просмотренным»/«В личный список» этого не делали (баг: меню
+    оставалось открытым после успешного действия), а «Добавить в комнату»
+    даже не закрывалось после выбора комнаты в пикере. onChange (необязателен,
+    зовёт вызывающая карточка — renderMovieTile/renderMovieInfoModal) —
+    сигнал «что-то поменялось» для реактивности карточки на месте, без
+    полной перезагрузки экрана. */
+function renderAddToMenu(kinopoiskId, rooms, onChange) {
   return renderCardMenu([
     {
       label: "Отметить просмотренным",
-      onClick: () => act(() => api(`/movies/${kinopoiskId}/watched`, { method: "POST" }), "Отмечено просмотренным"),
+      onClick: () => act(async () => {
+        closeCardMenu();
+        await api(`/movies/${kinopoiskId}/watched`, { method: "POST" });
+        if (onChange) onChange();
+      }, "Отмечено просмотренным"),
     },
-    { label: "Добавить в комнату", onClick: menu => renderRoomPicker(menu, kinopoiskId, rooms) },
-    { label: "В личный список", onClick: () => act(() => api("/my-list", { method: "POST", body: { kinopoiskId } }), "Добавлено в личный список") },
+    {
+      label: "Добавить в комнату",
+      onClick: menu => renderRoomPicker(menu, kinopoiskId, rooms, () => {
+        closeCardMenu();
+        if (onChange) onChange();
+      }),
+    },
+    {
+      label: "В личный список",
+      onClick: () => act(async () => {
+        closeCardMenu();
+        await api("/my-list", { method: "POST", body: { kinopoiskId } });
+        if (onChange) onChange();
+      }, "Добавлено в личный список"),
+    },
   ]);
 }
 
@@ -1176,7 +1223,11 @@ function renderMovieCard(rm, room) {
       }, "Фильм убран из комнаты"),
     },
   ]);
-  return renderMovieTile(mv, { menu, rating: { kinopoiskId: mv.kinopoiskId, score: mv.myScore } });
+  // onChange — если оценку/«В личный список»/«Добавить в комнату» сделали
+  // из модалки «Фильм» (не из этого меню), комната перечитывается так же,
+  // как после действий из самого меню выше — карточка не остаётся в
+  // устаревшем состоянии до следующего захода в комнату.
+  return renderMovieTile(mv, { menu, onChange: () => openRoom(room.id) });
 }
 
 // Карточка истории — watched в ЭТОЙ комнате. Тоже тонкая обёртка вокруг
@@ -1199,7 +1250,7 @@ function renderHistoryCard(rm, room) {
   ]);
   return renderMovieTile(mv, {
     menu,
-    rating: { kinopoiskId: mv.kinopoiskId, score: mv.myScore },
+    onChange: () => openRoom(room.id),
     extraLine: `Просмотрено ${whenText}`,
   });
 }
@@ -2573,7 +2624,7 @@ function renderWatchedInto(container, items) {
         },
       },
     ]);
-    container.append(renderMovieTile(mv, { menu, rating: { kinopoiskId: mv.kinopoiskId, score: mv.myScore } }));
+    container.append(renderMovieTile(mv, { menu }));
   }
 }
 
@@ -2629,7 +2680,7 @@ function renderMyListInto(container, items, onChange) {
           const data = await act(() => api("/rooms"));
           if (!data || menu.hidden) return;   // закрыли меню, пока список комнат летел
           menu.innerHTML = "";
-          renderRoomPicker(menu, mv.kinopoiskId, data.rooms);
+          renderRoomPicker(menu, mv.kinopoiskId, data.rooms, () => closeCardMenu());
         },
       },
       {
@@ -2641,7 +2692,7 @@ function renderMyListInto(container, items, onChange) {
         }, "Убрано из списка"),
       },
     ]);
-    container.append(renderMovieTile(mv, { menu, rating: { kinopoiskId: mv.kinopoiskId, score: mv.myScore } }));
+    container.append(renderMovieTile(mv, { menu, onChange }));
   }
 }
 

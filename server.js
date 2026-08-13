@@ -228,9 +228,10 @@ for (const sql of [
 // Лог для Admin (см. admin-internal.js) — своя таблица поверх той же базы.
 const adminLog = createAdminLog(db);
 
+const POISKKINO_DAILY_CAP = parseInt(process.env.POISKKINO_DAILY_CAP || "190", 10);
 const poiskkino = require("./poiskkino")({
   apiKey: process.env.POISKKINO_API_KEY || "",
-  dailyCap: parseInt(process.env.POISKKINO_DAILY_CAP || "190", 10),
+  dailyCap: POISKKINO_DAILY_CAP,
   db,
 });
 if (!poiskkino.enabled) {
@@ -1746,12 +1747,15 @@ const server = http.createServer(async (req, res) => {
     // Для Admin: server-to-server по общему ключу (см. admin-internal.js), не SSO.
     if (p === "/internal/stats" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const since7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
       return json(res, 200, {
         ok: true,
         rooms: db.prepare("SELECT COUNT(*) AS n FROM rooms").get().n,
         movies: db.prepare("SELECT COUNT(*) AS n FROM movies").get().n,
         selectionEvents: db.prepare("SELECT COUNT(*) AS n FROM selection_events").get().n,
-        apiUsageToday: poiskkino.enabled ? poiskkino.usageToday() : null,
+        apiUsage: poiskkino.enabled ? `${poiskkino.usageToday()}/${POISKKINO_DAILY_CAP}` : "выключен",
+        roomsCreated7d: db.prepare("SELECT COUNT(*) AS n FROM rooms WHERE created_at > ?").get(since7d).n,
+        selectionEvents7d: db.prepare("SELECT COUNT(*) AS n FROM selection_events WHERE created_at > ?").get(since7d).n,
       });
     }
     if (p === "/internal/logs" && req.method === "GET") {
