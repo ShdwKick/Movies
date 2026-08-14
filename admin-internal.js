@@ -1,3 +1,5 @@
+// Копия Shared/admin-internal.js — не редактировать здесь.
+// Правки вносят в Shared/ и раскладывают: node Shared/sync.mjs
 "use strict";
 /**
  * Серверная часть подключения сервиса к Admin.

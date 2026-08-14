@@ -112,11 +112,12 @@ nginx: готовый конфиг — `deploy/nginx-movies-443.conf`, прок�
       cd ~/auth && docker compose exec auth node server.js client-add movies "Что смотрим?" https://movies.burninghouse.ru/
       ```
       `redirect_uri` сверяется побайтово — со слэшем на конце, ровно как здесь
-- [ ] На сервере рядом с `docker-compose.prod.yml` положить `.env` с ключом
-      poiskkino.dev и выставить права 600:
+- [ ] На сервере рядом с `docker-compose.prod.yml` положить в `.env` ключ
+      poiskkino.dev. Если в этом `.env` уже есть другие переменные (например
+      `ADMIN_INTERNAL_KEY`) — не перезаписывайте файл целиком, используйте
+      `Shared/set-env.sh`:
       ```bash
-      printf 'POISKKINO_API_KEY=%s\n' 'ваш_ключ' > .env
-      chmod 600 .env
+      bash set-env.sh POISKKINO_API_KEY 'ваш_ключ'
       ```
 - [ ] Поднять nginx-конфиг и сертификат для `movies.burninghouse.ru`:
       ```bash
