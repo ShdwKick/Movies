@@ -231,7 +231,20 @@
 
   <div class="title-row">
     <h2>Мой список</h2>
-    <a class="btn tonal sm" id="profileMyListMoreBtn" href="#/my-list" hidden>Показать все</a>
+    <div class="title-actions">
+      <!-- Тот же переход на #/my-list/draw, что и у «Выбрать случайный» на
+           полной странице списка (см. myListDrawBtn/showMyListDraw) — просто
+           доступен сразу с превью, без захода на полный список. Видимость —
+           тот же порог (меньше 2 фильмов рандомить нечего), см. showProfile. -->
+      <button class="icon-btn" id="profileMyListDrawBtn" hidden title="Крутить" aria-label="Крутить">
+        <svg class="icon" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="9"/>
+          <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+          <path d="M12 3v6M12 15v6M21 12h-6M9 12H3M18.4 5.6l-4.2 4.2M9.8 14.2l-4.2 4.2M18.4 18.4l-4.2-4.2M9.8 9.8L5.6 5.6"/>
+        </svg>
+      </button>
+      <a class="btn tonal sm" id="profileMyListMoreBtn" href="#/my-list" hidden>Показать все</a>
+    </div>
   </div>
   <p class="muted" id="profileMyListEmpty">Список пуст — добавляйте фильмы через поиск в шапке.</p>
   <div class="movie-grid" id="profileMyListItems"></div>

@@ -2618,9 +2618,13 @@ async function showProfile() {
   if (myList) {
     $("profileMyListEmpty").hidden = myList.movies.length > 0;
     $("profileMyListMoreBtn").hidden = myList.movies.length <= PROFILE_PREVIEW_LIMIT;
+    // Тот же порог, что у myListDrawRow на полной странице — розыгрыш
+    // одного фильма ничего не решает.
+    $("profileMyListDrawBtn").hidden = myList.movies.length < 2;
     renderMyListInto($("profileMyListItems"), myList.movies.slice(0, PROFILE_PREVIEW_LIMIT), showProfile);
   }
 }
+$("profileMyListDrawBtn").onclick = () => { location.hash = "#/my-list/draw"; };
 
 // ───────────────────────── что мы смотрели ─────────────────────────
 async function showWatched() {
