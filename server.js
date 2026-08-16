@@ -717,6 +717,94 @@ function topGenres(limit) {
   `).all(limit);
 }
 
+// Меньше отметок — жанровый профиль ещё слишком шумный, чтобы из него
+// получались осмысленные рекомендации (см. GET /api/recommendations).
+const RECOMMENDATIONS_MIN_MARKS = 10;
+// Из скольких лучших кандидатов реально берём случайные RECOMMENDATIONS_SHOW —
+// шире, чем показываем, специально: кнопка «обновить» на фронте перетасовывает
+// внутри этого же пула, а не пересчитывает профиль заново, поэтому повторное
+// нажатие почти всегда показывает другой набор, даже если вкусы не менялись
+// ни на йоту с прошлого раза.
+const RECOMMENDATIONS_POOL_SIZE = 60;
+const RECOMMENDATIONS_SHOW = 24;
+
+function shuffleInPlace(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+/**
+ * Рекомендации на главной — жанровый affinity-профиль пользователя,
+ * построенный целиком из того, что уже закэшировано (movies), без единого
+ * нового запроса к poiskkino.dev: пользователь явно не хочет тратить деньги
+ * на сторонние API, а квоту poiskkino.dev на «рекомендации» тем более не
+ * разумно жечь, когда это просто перестановка уже известного.
+ *
+ * Профиль строится из movie_marks: для каждого жанра каждого ОЦЕНЁННОГО
+ * фильма прибавляем (score − 5.5) — высокие оценки жанр реально поднимают,
+ * низкие реально опускают (не просто «меньше плюса»), середина шкалы почти
+ * не влияет. Для ПРОСМОТРЕННЫХ БЕЗ ОЦЕНКИ прибавляем фиксированные +1 за
+ * жанр — сам факт просмотра тоже сигнал интереса, просто слабее явной
+ * оценки. rated-но-не-watched фильмы тоже участвуют в профиле (рейтинг
+ * ставится независимо от отметки «просмотрено», см. PUT .../rating) —
+ * профиль строится по ЛЮБОМУ сигналу, watched или score.
+ *
+ * Кандидаты — все закэшированные фильмы, КРОМЕ уже отмеченных (watched
+ * и/или оценённых — то же множество, что построило профиль) и уже лежащих
+ * в личном списке: и то, и другое пользователь и так уже знает, рекомендовать
+ * нечего. Ранжируем суммой affinity по жанрам фильма, при равенстве — по
+ * kp_rating/imdb_rating (не даём случайным фильмам без общественного
+ * рейтинга обгонять на пустом фильме с affinity=0). Фильмы с итоговым score
+ * ⩽ 0 отбрасываем целиком — это не «слабая рекомендация», а «мы ничего не
+ * знаем о том, что вам понравится в этом фильме», что не одно и то же.
+ *
+ * Пересборка — ПОЛНАЯ на каждый вызов, отдельного кэша под неё не заводим
+ * (масштаб личного проекта этого не требует, см. аналогичное решение у
+ * topGenres/moviesShowcasePage).
+ */
+function buildRecommendations(userId, limit) {
+  const markedRows = db.prepare(`
+    SELECT mm.kinopoisk_id, mm.score, m.genres
+      FROM movie_marks mm JOIN movies m ON m.kinopoisk_id = mm.kinopoisk_id
+     WHERE mm.user_id = ? AND (mm.watched = 1 OR mm.score IS NOT NULL)
+  `).all(userId);
+
+  if (markedRows.length < RECOMMENDATIONS_MIN_MARKS) return { eligible: false, movies: [] };
+
+  const affinity = new Map();
+  for (const row of markedRows) {
+    const weight = row.score != null ? row.score - 5.5 : 1;
+    for (const g of JSON.parse(row.genres || "[]")) affinity.set(g, (affinity.get(g) || 0) + weight);
+  }
+
+  const excluded = new Set(markedRows.map(r => r.kinopoisk_id));
+  for (const r of db.prepare("SELECT kinopoisk_id FROM personal_list WHERE user_id = ?").all(userId)) {
+    excluded.add(r.kinopoisk_id);
+  }
+
+  const allMovies = db.prepare(`
+    SELECT movies.*,
+           (SELECT AVG(score) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS avg_score,
+           (SELECT COUNT(*) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS rating_count
+      FROM movies
+  `).all();
+
+  const scored = [];
+  for (const row of allMovies) {
+    if (excluded.has(row.kinopoisk_id)) continue;
+    let score = 0;
+    for (const g of JSON.parse(row.genres || "[]")) score += affinity.get(g) || 0;
+    if (score > 0) scored.push({ row, score });
+  }
+  scored.sort((a, b) => b.score - a.score || (b.row.kp_rating || b.row.imdb_rating || 0) - (a.row.kp_rating || a.row.imdb_rating || 0));
+
+  const pool = shuffleInPlace(scored.slice(0, RECOMMENDATIONS_POOL_SIZE));
+  return { eligible: true, movies: pool.slice(0, limit).map(s => moviePayload(s.row)) };
+}
+
 /** Единая обработка ошибок poiskkino.js — квота/не настроено/апстрим в осмысленные HTTP-коды. */
 function poiskkinoError(res, e) {
   if (e && e.quota) return json(res, 429, { error: "quota", message: e.message });
@@ -1279,7 +1367,6 @@ async function api(req, res, seg, user, query) {
   // ── витрина «Из базы» на главной: последние закэшированные фильмы ─
   // Обычная авторизация, без привязки к комнате — тот же глобальный кэш
   // movies, что используют поиск/комнаты/личный список.
-  // TODO(будущее): рекомендации на основе movie_marks.score — не делаем сейчас.
   if (seg.length === 2 && seg[1] === "movies") {
     if (m !== "GET") return json(res, 405, { error: "method not allowed" });
     let limit = parseInt(query.get("limit"), 10);
@@ -1304,6 +1391,14 @@ async function api(req, res, seg, user, query) {
     if (m !== "GET") return json(res, 405, { error: "method not allowed" });
     const rows = topGenres(12);
     return json(res, 200, { genres: rows.map(r => ({ genre: r.genre, count: r.n })) });
+  }
+
+  // ── рекомендации на главной — см. buildRecommendations выше ─────
+  // eligible:false (недостаточно отметок) — валидный, не ошибочный ответ:
+  // фронт по нему прячет вкладку целиком, а не показывает пустой экран.
+  if (seg.length === 2 && seg[1] === "recommendations") {
+    if (m !== "GET") return json(res, 405, { error: "method not allowed" });
+    return json(res, 200, buildRecommendations(user.id, RECOMMENDATIONS_SHOW));
   }
 
   // ── карточка фильма целиком (используется «Подробнее» у результатов

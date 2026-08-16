@@ -117,19 +117,21 @@
   </div>
 
   <!-- Общая панель над витриной «Из базы» — переключатель вида (общий список/
-       по жанрам, см. refreshShowcase в app.js) слева и сортировка+фильтр
-       общего списка справа, специально ОДНОЙ строкой (просили выровнять
-       переключатель по вертикали с сортировкой). Панель — общий родитель для
-       genreShelvesWrap/cachedMoviesWrap ниже именно поэтому: переключатель
-       должен оставаться на месте независимо от того, какой из двух видов
-       сейчас показан, а сортировка/чип относятся только к общему списку —
-       #showcaseFlatControls прячется целиком в виде «По жанрам»
+       по жанрам/рекомендации, см. refreshShowcase в app.js) слева и
+       сортировка+фильтр общего списка справа, специально ОДНОЙ строкой
+       (просили выровнять переключатель по вертикали с сортировкой). Панель —
+       общий родитель для genreShelvesWrap/cachedMoviesWrap/recommendationsWrap
+       ниже именно поэтому: переключатель должен оставаться на месте
+       независимо от того, какой из трёх видов сейчас показан, а
+       сортировка/чип относятся только к общему списку — #showcaseFlatControls
+       прячется целиком в видах «По жанрам»/«Рекомендации»
        (updateShowcaseToolbarVisibility в app.js). Вся панель скрыта, только
-       когда показывать вообще нечего (жанров нет И кэш пуст). -->
+       когда показывать вообще нечего (ни жанров, ни рекомендаций, И кэш пуст). -->
   <div class="showcase-toolbar" id="showcaseToolbar" hidden>
     <div class="mini-seg" id="showcaseViewToggle" hidden>
       <button type="button" id="showcaseViewAllBtn">Все фильмы</button>
       <button type="button" id="showcaseViewGenresBtn">По жанрам</button>
+      <button type="button" id="showcaseViewRecommendationsBtn">Рекомендации</button>
     </div>
     <div class="showcase-flat-controls" id="showcaseFlatControls">
       <button class="chip" id="cachedGenreChip" type="button" hidden></button>
@@ -154,10 +156,26 @@
        жанрам» (#showcaseViewToggle) — см. refreshShowcase. -->
   <div id="genreShelvesWrap" hidden></div>
 
+  <!-- Рекомендации (GET /api/recommendations, см. renderRecommendations в
+       app.js) — жанровый affinity-профиль по оценкам/просмотрам пользователя,
+       считается на бэке (buildRecommendations в server.js). Вкладка вообще не
+       появляется в переключателе, пока сервер не сочтёт пользователя eligible
+       (мало отметок — см. RECOMMENDATIONS_MIN_MARKS); #recommendationsEmpty —
+       на случай, когда отметок достаточно, но подобрать реально нечего (все
+       кандидаты с положительным affinity уже просмотрены/в списке). -->
+  <div id="recommendationsWrap" hidden>
+    <div class="title-row">
+      <p class="muted">Подобрано по вашим оценкам и просмотрам.</p>
+      <button class="btn tonal sm" id="recommendationsRefreshBtn" type="button">Обновить</button>
+    </div>
+    <p class="muted" id="recommendationsEmpty" hidden>Пока нечего порекомендовать — оцените ещё несколько фильмов или загляните позже, когда кэш пополнится.</p>
+    <div class="movie-grid" id="recommendationsList"></div>
+  </div>
+
   <!-- Витрина последних закэшированных фильмов (GET /api/movies) — секция
        скрыта целиком, пока кэш пуст (см. renderCachedMovies в app.js), пока
        на главной активен поиск выше (см. homeSearchInput в app.js — вместо
-       неё показываются результаты), или пока выбран вид «По жанрам». -->
+       неё показываются результаты), или пока выбран другой вид. -->
   <div id="cachedMoviesWrap" hidden>
     <div class="movie-grid" id="cachedMoviesList"></div>
     <div class="pager" id="cachedPager">

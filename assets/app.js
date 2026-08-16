@@ -232,24 +232,43 @@ async function showRooms() {
   maybeStartTour();
 }
 
-/** Общая точка входа для витрины «Из базы» — решает, есть ли вообще жанры (а
-    значит, есть ли смысл показывать #showcaseViewToggle), и рендерит тот из
-    двух видов (общий список / полки по жанрам), что выбран в showcaseView.
-    Вызывается и при обычном заходе на главную (showRooms), и при возврате из
-    поиска на главной (runHomeSearch — пустая строка снова показывает
-    витрину). Жанры на каждый вызов запрашиваются заново, а не кэшируются —
-    на масштабе личного проекта это дешевле, чем городить инвалидацию кэша. */
+/** Общая точка входа для витрины «Из базы» — решает, есть ли вообще жанры и
+    рекомендации (а значит, есть ли смысл показывать соответствующие кнопки в
+    #showcaseViewToggle), и рендерит тот из трёх видов (общий список / полки
+    по жанрам / рекомендации), что выбран в showcaseView. Вызывается и при
+    обычном заходе на главную (showRooms), и при возврате из поиска на
+    главной (runHomeSearch — пустая строка снова показывает витрину). Жанры и
+    рекомендации на каждый вызов запрашиваются заново, а не кэшируются — на
+    масштабе личного проекта это дешевле, чем городить инвалидацию кэша;
+    recoData тут же используется для первого рендера вкладки «Рекомендации»
+    (если она активна) — повторный запрос не нужен, свежая перетасовка нужна
+    только по кнопке «Обновить» внутри самой вкладки (см. renderRecommendations). */
 async function refreshShowcase(rooms) {
-  const genresData = await act(() => api("/genres"));
+  const [genresData, recoData] = await Promise.all([
+    act(() => api("/genres")),
+    act(() => api("/recommendations")),
+  ]);
   const hasGenres = !!(genresData && genresData.genres.length);
-  $("showcaseViewToggle").hidden = !hasGenres;
-  if (!hasGenres) showcaseView = "all"; // нечего переключать — жанров в кэше нет
+  const hasRecommendations = !!(recoData && recoData.eligible);
+  $("showcaseViewToggle").hidden = !hasGenres && !hasRecommendations;
+  $("showcaseViewGenresBtn").hidden = !hasGenres;
+  $("showcaseViewRecommendationsBtn").hidden = !hasRecommendations;
+  // Вид, который сейчас выбран, мог перестать существовать (напр. включили
+  // «По жанрам», потом кэш очистили) — откатываемся на общий список.
+  if (!hasGenres && showcaseView === "genres") showcaseView = "all";
+  if (!hasRecommendations && showcaseView === "recommendations") showcaseView = "all";
   syncShowcaseViewButtons();
   if (showcaseView === "genres") {
     $("cachedMoviesWrap").hidden = true;
+    $("recommendationsWrap").hidden = true;
     renderGenreShelves(rooms, genresData);
+  } else if (showcaseView === "recommendations") {
+    $("cachedMoviesWrap").hidden = true;
+    $("genreShelvesWrap").hidden = true;
+    renderRecommendations(rooms, recoData);
   } else {
     $("genreShelvesWrap").hidden = true;
+    $("recommendationsWrap").hidden = true;
     renderCachedMovies(rooms);
   }
 }
@@ -257,19 +276,21 @@ async function refreshShowcase(rooms) {
 function syncShowcaseViewButtons() {
   $("showcaseViewAllBtn").classList.toggle("sel", showcaseView === "all");
   $("showcaseViewGenresBtn").classList.toggle("sel", showcaseView === "genres");
+  $("showcaseViewRecommendationsBtn").classList.toggle("sel", showcaseView === "recommendations");
 }
 
 /** #showcaseToolbar (переключатель вида + сортировка/фильтр общего списка,
-    см. index.html) — общий родитель для genreShelvesWrap/cachedMoviesWrap,
-    поэтому его видимость и видимость #showcaseFlatControls внутри него
-    (сортировка+чип, которые имеют смысл только для общего списка) не решает
-    ни renderCachedMovies, ни renderGenreShelves сами по себе — только эта
-    функция, вызываемая в конце обеих. Панель скрыта целиком, только когда
-    показывать вообще нечего (жанров нет И общий список пуст). */
+    см. index.html) — общий родитель для genreShelvesWrap/cachedMoviesWrap/
+    recommendationsWrap, поэтому его видимость и видимость
+    #showcaseFlatControls внутри него (сортировка+чип, которые имеют смысл
+    только для общего списка) не решает ни один из трёх render* сам по
+    себе — только эта функция, вызываемая в конце каждого. Панель скрыта
+    целиком, только когда показывать вообще нечего (ни жанров, ни
+    рекомендаций, И общий список пуст). */
 function updateShowcaseToolbarVisibility() {
-  const hasGenres = !$("showcaseViewToggle").hidden;
+  const hasExtraViews = !$("showcaseViewGenresBtn").hidden || !$("showcaseViewRecommendationsBtn").hidden;
   const hasFlatMovies = !$("cachedMoviesWrap").hidden;
-  $("showcaseToolbar").hidden = !hasGenres && !hasFlatMovies;
+  $("showcaseToolbar").hidden = !hasExtraViews && !hasFlatMovies;
   $("showcaseFlatControls").hidden = showcaseView !== "all";
 }
 
@@ -277,13 +298,22 @@ $("showcaseViewAllBtn").onclick = () => {
   showcaseView = "all";
   syncShowcaseViewButtons();
   $("genreShelvesWrap").hidden = true;
+  $("recommendationsWrap").hidden = true;
   renderCachedMovies(state.rooms);
 };
 $("showcaseViewGenresBtn").onclick = () => {
   showcaseView = "genres";
   syncShowcaseViewButtons();
   $("cachedMoviesWrap").hidden = true;
+  $("recommendationsWrap").hidden = true;
   renderGenreShelves(state.rooms);
+};
+$("showcaseViewRecommendationsBtn").onclick = () => {
+  showcaseView = "recommendations";
+  syncShowcaseViewButtons();
+  $("cachedMoviesWrap").hidden = true;
+  $("genreShelvesWrap").hidden = true;
+  renderRecommendations(state.rooms);
 };
 
 /** Витрина закэшированных фильмов (GET /api/movies?limit&offset&sort,
@@ -412,6 +442,35 @@ function renderGenreShelf(genre, movies, rooms) {
   return section;
 }
 
+/** Вкладка «Рекомендации» — альтернативный вид витрины (переключатель
+    #showcaseViewToggle, видимость которого решает refreshShowcase; сама эта
+    функция вызывается, только когда showcaseView === "recommendations").
+    data — уже полученный refreshShowcase ответ GET /api/recommendations
+    (первый рендер не дёргает сеть повторно); без него (переключатель
+    «Обновить» ниже, повторный заход на вкладку кнопкой) запрашивает сам —
+    каждый такой запрос сервер перетасовывает заново (см. buildRecommendations
+    в server.js), поэтому «Обновить» почти всегда покажет другой набор, даже
+    если вкусы не изменились. eligible:false — не ошибка, а нормальный ответ
+    «пока рано» (см. RECOMMENDATIONS_MIN_MARKS на бэке); эта вкладка вообще
+    не должна быть видна в таком случае (её скрывает refreshShowcase), но
+    сама функция на всякий случай тоже не падает, а просто ничего не рисует. */
+async function renderRecommendations(rooms, data) {
+  const wrap = $("recommendationsWrap");
+  const result = data || await act(() => api("/recommendations"));
+  if (!result || !result.eligible) { wrap.hidden = true; updateShowcaseToolbarVisibility(); return; }
+  wrap.hidden = false;
+
+  const box = $("recommendationsList");
+  box.textContent = "";
+  openCardMenu = null; // старые плитки со своими меню-«…» уходят целиком
+  $("recommendationsEmpty").hidden = result.movies.length > 0;
+  for (const mv of result.movies) {
+    box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv.kinopoiskId, rooms) }));
+  }
+  updateShowcaseToolbarVisibility();
+}
+$("recommendationsRefreshBtn").onclick = () => renderRecommendations(state.rooms);
+
 $("cachedSortSelect").onchange = e => {
   showcaseState.sort = e.target.value;
   showcaseState.offset = 0; // иначе можно улететь на несуществующую страницу новой сортировки
@@ -470,6 +529,7 @@ function renderHomeSearchResults(movies) {
   $("showcaseToolbar").hidden = true;
   $("genreShelvesWrap").hidden = true;
   $("cachedMoviesWrap").hidden = true;
+  $("recommendationsWrap").hidden = true;
   const box = $("homeSearchResults");
   box.hidden = false;
   box.textContent = "";
