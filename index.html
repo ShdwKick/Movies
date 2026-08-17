@@ -68,6 +68,10 @@
     <button class="icon-btn" id="serviceProfileBtn" hidden title="Мои фильмы" aria-label="Мои фильмы">
       <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.2"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg>
     </button>
+    <!-- Каталог теперь смотрят и без входа (см. updateHeaderForAuth в
+         app.js) — вместо аккаунта аноним видит эту кнопку, ведёт на тот же
+         goLogin(), что и остальные гейты личных действий по сервису. -->
+    <button class="btn tonal sm" id="headerLoginBtn" hidden>Войти</button>
     <div class="menu-wrap" id="accountMenuWrap" hidden>
       <button class="icon-btn" id="accountBtn" title="Аккаунт" aria-label="Аккаунт" aria-haspopup="true" aria-expanded="false">
         <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/></svg>
@@ -146,6 +150,7 @@
       <button type="button" id="showcaseViewAllBtn">Все фильмы</button>
       <button type="button" id="showcaseViewGenresBtn">По жанрам</button>
       <button type="button" id="showcaseViewRecommendationsBtn">Рекомендации</button>
+      <button type="button" id="showcaseViewFriendsBtn">Друзья</button>
     </div>
     <div class="showcase-flat-controls" id="showcaseFlatControls">
       <button class="chip" id="cachedGenreChip" type="button" hidden></button>
@@ -184,6 +189,15 @@
     </div>
     <p class="muted" id="recommendationsEmpty" hidden>Пока нечего порекомендовать — оцените ещё несколько фильмов или загляните позже, когда кэш пополнится.</p>
     <div class="movie-grid" id="recommendationsList"></div>
+  </div>
+
+  <!-- Друзья (GET /api/friends/activity, см. renderFriendsActivity в app.js)
+       — фильмы, которые оценили/посмотрели друзья из BurningHouse Auth, а
+       сам пользователь ещё нет (buildFriendsActivity в server.js). Вкладка
+       появляется в переключателе, только если у друзей вообще есть такая
+       активность — своего пустого состояния тут не нужно (см. refreshShowcase). -->
+  <div id="friendsActivityWrap" hidden>
+    <div class="movie-grid" id="friendsActivityList"></div>
   </div>
 
   <!-- Витрина последних закэшированных фильмов (GET /api/movies) — секция
@@ -391,6 +405,13 @@
     <div class="modal-head">
       <h2 id="movieInfoModalTitle">Фильм</h2>
       <div class="modal-head-actions">
+        <!-- Копирует ссылку вида #/movie/:id (см. openSharedMovie в app.js) —
+             работает и без входа: карточка фильма — публичный GET, ссылку
+             может открыть кто угодно. Само действие «поделиться» — не
+             личное, requireAuth() тут не нужен. -->
+        <button class="icon-btn" id="movieInfoShareBtn" title="Скопировать ссылку" aria-label="Скопировать ссылку">
+          <svg class="icon" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.5l6.8-4M8.6 13.5l6.8 4"/></svg>
+        </button>
         <div id="movieInfoModalMenuWrap"></div>
         <button class="icon-btn" id="movieInfoModalClose" aria-label="Закрыть">
           <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>

@@ -805,6 +805,106 @@ function buildRecommendations(userId, limit) {
   return { eligible: true, movies: pool.slice(0, limit).map(s => moviePayload(s.row)) };
 }
 
+// ───────────────────────── друзья (BurningHouse Auth) ─────────────────────────
+const FRIENDS_ACTIVITY_SHOW = 24;
+
+/**
+ * Список друзей — проксируем GET /api/friends у Auth ровно тем же
+ * Bearer-токеном, которым уже пришёл запрос к нам: этот маршрут у Auth
+ * специально открыт для других сервисов без дополнительных прав/ключей (см.
+ * Auth/INTEGRATION.md) — сам Auth и решает, чей токен чьи данные видит.
+ * Своего кэша не заводим — вызывается редко (карточка фильма, подборка
+ * «Друзья»), а устаревший список друзей надёжнее не иметь вообще, чем
+ * показать бывшего друга. Любая сетевая/HTTP-ошибка — не 500 у нас, а
+ * просто «друзей нет» (пустой массив): фича необязательная, не должна
+ * ронять всё остальное на странице, если Auth недоступен.
+ */
+async function fetchFriends(req) {
+  const token = auth.bearer(req);
+  if (!token) return [];
+  try {
+    const res = await fetch(`${AUTH_BASE}/api/friends`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.friends) ? data.friends : [];
+  } catch (e) {
+    console.error("Auth /api/friends:", e);
+    return [];
+  }
+}
+
+/** Оценки/просмотры друзей — карточка конкретного фильма (см. GET
+    .../friends-marks ниже). friends уже получены (см. вызов) — тут только
+    join с movie_marks по их userId, без сети. */
+function friendsMarksForMovie(kinopoiskId, friends) {
+  if (!friends.length) return [];
+  const ids = friends.map(f => f.userId);
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db.prepare(`
+    SELECT user_id, watched, score FROM movie_marks
+     WHERE kinopoisk_id = ? AND user_id IN (${placeholders}) AND (watched = 1 OR score IS NOT NULL)
+  `).all(kinopoiskId, ...ids);
+  const byUser = new Map(rows.map(r => [r.user_id, r]));
+  return friends
+    .filter(f => byUser.has(f.userId))
+    .map(f => {
+      const r = byUser.get(f.userId);
+      return { name: f.name || f.username, watched: !!r.watched, score: r.score };
+    });
+}
+
+/**
+ * Подборка «Друзья» на главной — фильмы, которые друзья оценили или
+ * посмотрели, а сам пользователь ещё нет (watched/score/личный список —
+ * то же исключение, что и у своих собственных рекомендаций, см.
+ * buildRecommendations выше). Сортировка — по свежести отметки друга
+ * (COALESCE(rated_at, watched_at)), самое недавнее сверху: это лента
+ * активности, а не ранжирование по вкусу, шафл тут не нужен. Каждый фильм
+ * несёт список friendMarks — кто из друзей и что поставил, показываем на
+ * плитке/в модалке на фронте.
+ */
+function buildFriendsActivity(userId, friends, limit) {
+  if (!friends.length) return [];
+  const friendById = new Map(friends.map(f => [f.userId, f]));
+  const ids = friends.map(f => f.userId);
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db.prepare(`
+    SELECT kinopoisk_id, user_id, watched, score, COALESCE(rated_at, watched_at) AS at
+      FROM movie_marks
+     WHERE user_id IN (${placeholders}) AND (watched = 1 OR score IS NOT NULL)
+  `).all(...ids);
+
+  const excluded = new Set(
+    db.prepare("SELECT kinopoisk_id FROM movie_marks WHERE user_id = ? AND (watched = 1 OR score IS NOT NULL)").all(userId).map(r => r.kinopoisk_id)
+  );
+  for (const r of db.prepare("SELECT kinopoisk_id FROM personal_list WHERE user_id = ?").all(userId)) excluded.add(r.kinopoisk_id);
+
+  const byMovie = new Map();
+  for (const r of rows) {
+    if (excluded.has(r.kinopoisk_id)) continue;
+    const friend = friendById.get(r.user_id);
+    if (!friend) continue;
+    if (!byMovie.has(r.kinopoisk_id)) byMovie.set(r.kinopoisk_id, []);
+    byMovie.get(r.kinopoisk_id).push({ name: friend.name || friend.username, watched: !!r.watched, score: r.score, at: r.at || 0 });
+  }
+  if (!byMovie.size) return [];
+
+  const ranked = [...byMovie.entries()]
+    .sort((a, b) => Math.max(...b[1].map(x => x.at)) - Math.max(...a[1].map(x => x.at)))
+    .slice(0, limit);
+
+  const ids2 = ranked.map(([kpId]) => kpId);
+  const movieRows = db.prepare(`SELECT * FROM movies WHERE kinopoisk_id IN (${ids2.map(() => "?").join(",")})`).all(...ids2);
+  const movieById = new Map(movieRows.map(m => [m.kinopoisk_id, m]));
+
+  return ranked
+    .filter(([kpId]) => movieById.has(kpId))
+    .map(([kpId, marks]) => ({
+      ...moviePayload(movieById.get(kpId)),
+      friendMarks: marks.map(({ name, watched, score }) => ({ name, watched, score })),
+    }));
+}
+
 /** Единая обработка ошибок poiskkino.js — квота/не настроено/апстрим в осмысленные HTTP-коды. */
 function poiskkinoError(res, e) {
   if (e && e.quota) return json(res, 429, { error: "quota", message: e.message });
@@ -1345,6 +1445,19 @@ async function invitePreview(req, res, rawCode) {
   });
 }
 
+// Единственное место, где решается, какие GET можно смотреть без токена
+// (см. вызов в основном обработчике ниже) — сознательно узкий список: то,
+// что уже лежит в нашем кэше и ничего не стоит показать (список/карточка
+// фильма, жанры), а не «любой GET». /search сюда намеренно НЕ входит — это
+// живой запрос к poiskkino.dev, тратит общую суточную квоту, доступ к нему
+// остаётся только по токену.
+function isPublicGetRoute(seg) {
+  if (seg.length === 2 && seg[1] === "movies") return true;   // список/витрина
+  if (seg.length === 3 && seg[1] === "movies") return true;   // карточка одного фильма (#/movie/:id)
+  if (seg.length === 2 && seg[1] === "genres") return true;
+  return false;
+}
+
 async function api(req, res, seg, user, query) {
   const m = req.method;
 
@@ -1378,7 +1491,7 @@ async function api(req, res, seg, user, query) {
     // whitelist проверяется внутри moviesShowcasePage через MOVIES_SORT_ORDER.
     const sort = query.get("sort") || "recent";
     const genre = str(query.get("genre"), 100) || null;
-    const rows = moviesShowcasePage(limit, offset, sort, user.id, genre);
+    const rows = moviesShowcasePage(limit, offset, sort, user ? user.id : null, genre);
     const total = moviesCountFiltered(genre);
     return json(res, 200, { movies: rows.map(moviePayload), total, limit, offset, genre });
   }
@@ -1399,6 +1512,25 @@ async function api(req, res, seg, user, query) {
   if (seg.length === 2 && seg[1] === "recommendations") {
     if (m !== "GET") return json(res, 405, { error: "method not allowed" });
     return json(res, 200, buildRecommendations(user.id, RECOMMENDATIONS_SHOW));
+  }
+
+  // ── подборка «Друзья» на главной — см. buildFriendsActivity выше ─
+  // Пустой friends (нет друзей в Auth или сам Auth недоступен) — валидный
+  // ответ {movies:[]}, фронт по нему просто прячет вкладку, как и у
+  // рекомендаций при eligible:false.
+  if (seg.length === 3 && seg[1] === "friends" && seg[2] === "activity") {
+    if (m !== "GET") return json(res, 405, { error: "method not allowed" });
+    const friends = await fetchFriends(req);
+    return json(res, 200, { movies: buildFriendsActivity(user.id, friends, FRIENDS_ACTIVITY_SHOW) });
+  }
+
+  // ── оценки/просмотры друзей у конкретного фильма (карточка «Фильм») ─
+  if (seg.length === 4 && seg[1] === "movies" && seg[3] === "friends-marks") {
+    if (m !== "GET") return json(res, 405, { error: "method not allowed" });
+    const kpId = parseInt(seg[2], 10);
+    if (!Number.isFinite(kpId) || kpId <= 0) return json(res, 400, { error: "bad kinopoiskId" });
+    const friends = await fetchFriends(req);
+    return json(res, 200, { friends: friendsMarksForMovie(kpId, friends) });
   }
 
   // ── карточка фильма целиком (используется «Подробнее» у результатов
@@ -1422,7 +1554,7 @@ async function api(req, res, seg, user, query) {
     // ensureMovieCached отдаёт голую строку movies без этих подзапросов, а
     // именно этот эндпоинт — единственное место, где карточка результата
     // поиска (ещё нигде не оценённая с фронта) подтягивает оценку впервые.
-    const mark = markSummary(kpId, user.id);
+    const mark = markSummary(kpId, user ? user.id : null);
     return json(res, 200, { ...moviePayload(movie), avgScore: mark.avgScore, ratingCount: mark.ratingCount, myScore: mark.myScore });
   }
 
@@ -1881,10 +2013,20 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p.startsWith("/api/")) {
-      // Вся авторизация — вот эти две строки. Подпись проверяется локально,
-      // запроса в auth-сервис здесь не происходит.
+      // Подпись токена проверяется локально, запроса в auth-сервис здесь не
+      // происходит. user может оказаться null — сервис теперь не требует
+      // входа просто чтобы посмотреть каталог (см. isPublicGetRoute выше):
+      // без токена доступны только чтения из уже закэшированного (список
+      // фильмов, карточка конкретного фильма — это же и есть то, что
+      // открывается по расшариваемой ссылке #/movie/:id, — и список жанров).
+      // Поиск (живой запрос к poiskkino.dev, тратит общую квоту) и всё, что
+      // пишет или отдаёт личные данные, по-прежнему требует токена — эти
+      // маршруты сами уже полагаются на user.id и без него просто упадут,
+      // поэтому 401 тут и дальше их не пускает.
       const user = await auth.userFromRequest(req);
-      if (!user) return json(res, 401, { error: "unauthorized" });
+      if (!user && !(req.method === "GET" && isPublicGetRoute(seg))) {
+        return json(res, 401, { error: "unauthorized" });
+      }
       return await api(req, res, seg, user, url.searchParams);
     }
 

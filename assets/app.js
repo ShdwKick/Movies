@@ -96,20 +96,41 @@ class ApiError extends Error {
   constructor(status, body) { super(body?.message || body?.error || "ошибка запроса"); this.status = status; this.body = body; }
 }
 
-async function api(path, { method = "GET", body } = {}) {
+// optionalAuth — для маршрутов, которые сервер отдаёт и без токена (каталог
+// фильмов/жанры — см. isPublicGetRoute в server.js): auth.fetch() бросает
+// AuthRequiredError, ЕСЛИ ТОКЕНА ВООБЩЕ НЕТ, не только когда он протух и не
+// обновился — анонимному посетителю иначе никогда не дойти даже до
+// публичного GET. Для authenticated-пользователя ничего не меняется — идёт
+// обычный auth.fetch(), чтобы my_score в ответе оставался персональным.
+async function api(path, { method = "GET", body, optionalAuth = false } = {}) {
   let res;
+  const plainFetch = () => fetch("/api" + path, { method });
   try {
-    res = await auth.fetch("/api" + path, {
-      method,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    if (optionalAuth && !auth.isAuthenticated()) {
+      res = await plainFetch();
+    } else {
+      res = await auth.fetch("/api" + path, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    }
   } catch (e) {
-    // Единственный случай, когда пользователя надо вернуть на вход: access
-    // протух И обновить его не удалось. Своей формы входа у сервиса нет —
-    // сразу уводим на общую.
-    if (e && e.name === "AuthRequiredError") { auth.clearTokens(); state.me = null; goLogin(); throw e; }
-    throw e;
+    if (e && e.name === "AuthRequiredError") {
+      // Токен протух и не обновился — локально мы уже не авторизованы.
+      auth.clearTokens(); state.me = null;
+      if (optionalAuth) {
+        // Публичный маршрут — вместо жёсткого увода на SSO просто
+        // переключаем шапку в анонимный вид и продолжаем смотреть каталог.
+        updateHeaderForAuth();
+        res = await plainFetch();
+      } else {
+        goLogin();
+        throw e;
+      }
+    } else {
+      throw e;
+    }
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, data);
@@ -149,27 +170,44 @@ async function init() {
     if (saved && saved !== location.hash) location.hash = saved;
   }
 
-  // Своей страницы входа у сервиса нет: аккаунт общий, форма живёт на
-  // auth-домене. Неавторизованного уводим туда молча.
-  if (!auth.isAuthenticated()) return goLogin();
-
-  // Кто я — знаем сразу из токена, не дожидаясь списка комнат.
-  state.me = auth.getUser() || state.me;
-
-  $("accountMenuWrap").hidden = false;
-  $("globalSearchWrap").hidden = false;
-  $("serviceProfileBtn").hidden = false;
-  $("accountBtn").title = "Аккаунт — " + who(state.me);
-
+  // Раньше отсутствие токена сразу уводило на auth (см. bh-no-service-login-page)
+  // — теперь каталог фильмов и расшариваемая ссылка на фильм (#/movie/:id)
+  // доступны и анониму (см. isPublicGetRoute в server.js), поэтому жёсткого
+  // увода тут больше нет. Личные разделы по-прежнему требуют войти — это
+  // решает сама route() при заходе на конкретный хэш (см. requireAuth/
+  // isPersonalHash ниже), с сохранением хэша, чтобы после входа вернуться
+  // туда же, куда шёл.
+  updateHeaderForAuth();
   await route();
 }
 
-/** Экран «нужен вход» — только на случай сбоя: увести на auth не удалось. */
+/** Шапка (поиск/аккаунт/«Мои фильмы»/кнопка «Войти») — единая точка, откуда
+    решается, что показывать анониму, а что вошедшему. Дёргается при
+    старте и из api() при протухшем токене на публичном маршруте (см. там —
+    аноним, у которого разлогинило сессию на публичном GET, не должен
+    получить жёсткий редирект на SSO, а просто увидеть анонимную шапку). */
+function updateHeaderForAuth() {
+  const authed = !!(auth && auth.isAuthenticated());
+  if (authed) state.me = auth.getUser() || state.me;
+  // Поиск в шапке общий — виден и анониму, сам ввод/сабмит гейтится
+  // requireAuth() (см. runGlobalSearch/runHomeSearch), не видимость поля.
+  $("globalSearchWrap").hidden = false;
+  $("accountMenuWrap").hidden = !authed;
+  $("serviceProfileBtn").hidden = !authed;
+  $("headerLoginBtn").hidden = authed;
+  if (authed) $("accountBtn").title = "Аккаунт — " + who(state.me);
+}
+$("headerLoginBtn").onclick = goLogin;
+
+/** Экран «нужен вход» — только на случай сбоя: сам auth не поднялся (напр.
+    /api/config недоступен). Обычный анонимный просмотр — штатная ветка,
+    сюда не попадает; это тот самый редкий «совсем сломалось» случай. */
 function showAuthScreen(title, note) {
   showOnly("authView");
   $("accountMenuWrap").hidden = true;
   $("globalSearchWrap").hidden = true;
   $("serviceProfileBtn").hidden = true;
+  $("headerLoginBtn").hidden = true;
   closeAccountMenu();
   $("authTitle").textContent = title;
   $("authNote").textContent = note;
@@ -184,6 +222,17 @@ function goLogin() {
 }
 $("loginBtn").onclick = goLogin;
 
+/** true — можно продолжать действие; false — гостя уже увели на вход (см.
+    goLogin выше, хэш сохранится и вернёт сюда же после входа). Единая точка
+    для любого действия, которому нужно знать, кто пользователь: оценка,
+    «Отметить просмотренным», добавление в комнату/личный список, создание/
+    вступление в комнату, поиск — см. использование по всему файлу. */
+function requireAuth() {
+  if (auth && auth.isAuthenticated()) return true;
+  goLogin();
+  return false;
+}
+
 function showOnly(id) {
   for (const v of ["authView", "roomsView", "roomView", "drawView", "joinView", "watchedView", "myListView", "profileView"]) $(v).hidden = v !== id;
   // Пламя как фон целой страницы допустимо только на экране «нужен вход»
@@ -192,12 +241,23 @@ function showOnly(id) {
   document.body.classList.toggle("auth-bg", id === "authView");
 }
 
+// Хэши личных разделов — без входа на них смотреть нечего (данные конкретно
+// ЭТОГО пользователя): комната, история/личный список и их розыгрыш,
+// профиль, приглашение (вступление — уже мутация). Общая витрина (#/) и
+// карточка фильма по расшариваемой ссылке (#/movie/:id) сюда намеренно НЕ
+// входят — это ровно то, что теперь доступно анониму.
+function isPersonalHash(hash) {
+  return /^#\/join\//.test(hash) || /^#\/room\//.test(hash) ||
+    hash === "#/watched" || hash === "#/my-list" || hash === "#/my-list/draw" || hash === "#/profile";
+}
+
 async function route() {
-  if (!auth || !auth.isAuthenticated()) return goLogin();
   const hash = location.hash || "#/";
+  if (isPersonalHash(hash) && !requireAuth()) return;
   const join = hash.match(/^#\/join\/([A-Za-z0-9]+)/);
   const draw = hash.match(/^#\/room\/([0-9a-f-]{36})\/draw/i);
   const room = hash.match(/^#\/room\/([0-9a-f-]{36})$/i);
+  const movie = hash.match(/^#\/movie\/(\d+)/);
 
   if (join) return showJoin(join[1].toUpperCase());
   if (draw) return showDraw(draw[1]);
@@ -206,6 +266,7 @@ async function route() {
   if (hash === "#/my-list/draw") return showMyListDraw();
   if (hash === "#/my-list") return showMyList();
   if (hash === "#/profile") return showProfile();
+  if (movie) return openSharedMovie(parseInt(movie[1], 10));
   return showRooms();
 }
 addEventListener("hashchange", () => { closeGlobalSearch(); route().catch(console.error); });
@@ -223,52 +284,73 @@ async function showRooms() {
   $("homeSearchClearBtn").hidden = true;
   $("homeSearchResults").hidden = true;
   $("homeSearchResults").textContent = "";
-  const data = await act(() => api("/rooms"));
-  if (!data) return;
-  state.me = data.me;
-  state.rooms = data.rooms;
+
+  // Список комнат — личный, анониму его не видать (GET /rooms требует
+  // токен), но экран всё равно открывается: витрина ниже (refreshShowcase)
+  // доступна без входа, а кнопки «Создать»/«Присоединиться» остаются на
+  // месте — просто уводят на вход при нажатии (см. requireAuth в их
+  // обработчиках), а не пропадают.
+  const authed = auth.isAuthenticated();
+  if (authed) {
+    const data = await act(() => api("/rooms"));
+    if (!data) return;
+    state.me = data.me;
+    state.rooms = data.rooms;
+    $("roomsEmpty").textContent = "Комнат пока нет — создайте первую.";
+  } else {
+    state.me = null;
+    state.rooms = [];
+    $("roomsEmpty").textContent = "Войдите, чтобы видеть и создавать комнаты.";
+  }
   renderRooms();
   refreshShowcase(state.rooms);
   maybeStartTour();
 }
 
-/** Общая точка входа для витрины «Из базы» — решает, есть ли вообще жанры и
-    рекомендации (а значит, есть ли смысл показывать соответствующие кнопки в
-    #showcaseViewToggle), и рендерит тот из трёх видов (общий список / полки
-    по жанрам / рекомендации), что выбран в showcaseView. Вызывается и при
-    обычном заходе на главную (showRooms), и при возврате из поиска на
-    главной (runHomeSearch — пустая строка снова показывает витрину). Жанры и
-    рекомендации на каждый вызов запрашиваются заново, а не кэшируются — на
-    масштабе личного проекта это дешевле, чем городить инвалидацию кэша;
-    recoData тут же используется для первого рендера вкладки «Рекомендации»
-    (если она активна) — повторный запрос не нужен, свежая перетасовка нужна
-    только по кнопке «Обновить» внутри самой вкладки (см. renderRecommendations). */
+/** Общая точка входа для витрины «Из базы» — решает, есть ли вообще жанры,
+    рекомендации и активность друзей (а значит, есть ли смысл показывать
+    соответствующие кнопки в #showcaseViewToggle), и рендерит тот из четырёх
+    видов (общий список / полки по жанрам / рекомендации / друзья), что
+    выбран в showcaseView. Вызывается и при обычном заходе на главную
+    (showRooms), и при возврате из поиска на главной (runHomeSearch — пустая
+    строка снова показывает витрину). Всё — жанры/рекомендации/друзья — на
+    каждый вызов запрашивается заново, а не кэшируется — на масштабе личного
+    проекта это дешевле, чем городить инвалидацию кэша; recoData/friendsData
+    тут же используются для первого рендера своих вкладок (если активны) —
+    повторный запрос не нужен, свежая перетасовка рекомендаций — только по
+    кнопке «Обновить» внутри самой вкладки (см. renderRecommendations). */
 async function refreshShowcase(rooms) {
-  const [genresData, recoData] = await Promise.all([
-    act(() => api("/genres")),
-    act(() => api("/recommendations")),
+  // /recommendations и /friends/activity остаются личными на бэке (нужен
+  // user.id/токен для Auth) — вызываем, только если вошли, а не полагаемся
+  // на optionalAuth: без него это был бы гарантированный 401 на каждый
+  // заход анонима.
+  const authed = auth.isAuthenticated();
+  const [genresData, recoData, friendsData] = await Promise.all([
+    act(() => api("/genres", { optionalAuth: true })),
+    authed ? act(() => api("/recommendations")) : Promise.resolve(null),
+    authed ? act(() => api("/friends/activity")) : Promise.resolve(null),
   ]);
   const hasGenres = !!(genresData && genresData.genres.length);
   const hasRecommendations = !!(recoData && recoData.eligible);
-  $("showcaseViewToggle").hidden = !hasGenres && !hasRecommendations;
+  const hasFriendsActivity = !!(friendsData && friendsData.movies.length);
+  $("showcaseViewToggle").hidden = !hasGenres && !hasRecommendations && !hasFriendsActivity;
   $("showcaseViewGenresBtn").hidden = !hasGenres;
   $("showcaseViewRecommendationsBtn").hidden = !hasRecommendations;
+  $("showcaseViewFriendsBtn").hidden = !hasFriendsActivity;
   // Вид, который сейчас выбран, мог перестать существовать (напр. включили
   // «По жанрам», потом кэш очистили) — откатываемся на общий список.
   if (!hasGenres && showcaseView === "genres") showcaseView = "all";
   if (!hasRecommendations && showcaseView === "recommendations") showcaseView = "all";
+  if (!hasFriendsActivity && showcaseView === "friends") showcaseView = "all";
   syncShowcaseViewButtons();
+  hideAllShowcaseWraps();
   if (showcaseView === "genres") {
-    $("cachedMoviesWrap").hidden = true;
-    $("recommendationsWrap").hidden = true;
     renderGenreShelves(rooms, genresData);
   } else if (showcaseView === "recommendations") {
-    $("cachedMoviesWrap").hidden = true;
-    $("genreShelvesWrap").hidden = true;
     renderRecommendations(rooms, recoData);
+  } else if (showcaseView === "friends") {
+    renderFriendsActivity(rooms, friendsData);
   } else {
-    $("genreShelvesWrap").hidden = true;
-    $("recommendationsWrap").hidden = true;
     renderCachedMovies(rooms);
   }
 }
@@ -277,18 +359,26 @@ function syncShowcaseViewButtons() {
   $("showcaseViewAllBtn").classList.toggle("sel", showcaseView === "all");
   $("showcaseViewGenresBtn").classList.toggle("sel", showcaseView === "genres");
   $("showcaseViewRecommendationsBtn").classList.toggle("sel", showcaseView === "recommendations");
+  $("showcaseViewFriendsBtn").classList.toggle("sel", showcaseView === "friends");
+}
+
+/** Прячет все четыре обёртки видов разом — общая подготовка перед тем, как
+    render-функция конкретного вида покажет свою (см. refreshShowcase и
+    обработчики кнопок ниже). Один список id вместо повторения его в каждом
+    обработчике — не разъедется, если появится ещё один вид. */
+function hideAllShowcaseWraps() {
+  for (const id of ["cachedMoviesWrap", "genreShelvesWrap", "recommendationsWrap", "friendsActivityWrap"]) $(id).hidden = true;
 }
 
 /** #showcaseToolbar (переключатель вида + сортировка/фильтр общего списка,
-    см. index.html) — общий родитель для genreShelvesWrap/cachedMoviesWrap/
-    recommendationsWrap, поэтому его видимость и видимость
-    #showcaseFlatControls внутри него (сортировка+чип, которые имеют смысл
-    только для общего списка) не решает ни один из трёх render* сам по
-    себе — только эта функция, вызываемая в конце каждого. Панель скрыта
-    целиком, только когда показывать вообще нечего (ни жанров, ни
-    рекомендаций, И общий список пуст). */
+    см. index.html) — общий родитель для всех четырёх обёрток видов,
+    поэтому его видимость и видимость #showcaseFlatControls внутри него
+    (сортировка+чип, которые имеют смысл только для общего списка) не решает
+    ни один из render* сам по себе — только эта функция, вызываемая в конце
+    каждого. Панель скрыта целиком, только когда показывать вообще нечего
+    (ни жанров, ни рекомендаций, ни друзей, И общий список пуст). */
 function updateShowcaseToolbarVisibility() {
-  const hasExtraViews = !$("showcaseViewGenresBtn").hidden || !$("showcaseViewRecommendationsBtn").hidden;
+  const hasExtraViews = !$("showcaseViewGenresBtn").hidden || !$("showcaseViewRecommendationsBtn").hidden || !$("showcaseViewFriendsBtn").hidden;
   const hasFlatMovies = !$("cachedMoviesWrap").hidden;
   $("showcaseToolbar").hidden = !hasExtraViews && !hasFlatMovies;
   $("showcaseFlatControls").hidden = showcaseView !== "all";
@@ -297,23 +387,26 @@ function updateShowcaseToolbarVisibility() {
 $("showcaseViewAllBtn").onclick = () => {
   showcaseView = "all";
   syncShowcaseViewButtons();
-  $("genreShelvesWrap").hidden = true;
-  $("recommendationsWrap").hidden = true;
+  hideAllShowcaseWraps();
   renderCachedMovies(state.rooms);
 };
 $("showcaseViewGenresBtn").onclick = () => {
   showcaseView = "genres";
   syncShowcaseViewButtons();
-  $("cachedMoviesWrap").hidden = true;
-  $("recommendationsWrap").hidden = true;
+  hideAllShowcaseWraps();
   renderGenreShelves(state.rooms);
 };
 $("showcaseViewRecommendationsBtn").onclick = () => {
   showcaseView = "recommendations";
   syncShowcaseViewButtons();
-  $("cachedMoviesWrap").hidden = true;
-  $("genreShelvesWrap").hidden = true;
+  hideAllShowcaseWraps();
   renderRecommendations(state.rooms);
+};
+$("showcaseViewFriendsBtn").onclick = () => {
+  showcaseView = "friends";
+  syncShowcaseViewButtons();
+  hideAllShowcaseWraps();
+  renderFriendsActivity(state.rooms);
 };
 
 /** Витрина закэшированных фильмов (GET /api/movies?limit&offset&sort,
@@ -332,7 +425,7 @@ async function renderCachedMovies(rooms) {
   const { limit, offset, sort, genre } = showcaseState;
   let url = `/movies?limit=${limit}&offset=${offset}&sort=${encodeURIComponent(sort)}`;
   if (genre) url += `&genre=${encodeURIComponent(genre)}`;
-  const data = await act(() => api(url));
+  const data = await act(() => api(url, { optionalAuth: true }));
   const wrap = $("cachedMoviesWrap");
   // Пустая витрина при активном фильтре — не прячем секцию целиком (иначе
   // непонятно, куда делся список и как вернуться), а показываем пустой грид
@@ -392,12 +485,12 @@ async function renderCachedMovies(rooms) {
     (showcaseState.genre/#cachedGenreChip), без отдельного экрана под жанр. */
 async function renderGenreShelves(rooms, genresList) {
   const wrap = $("genreShelvesWrap");
-  const list = genresList || await act(() => api("/genres"));
+  const list = genresList || await act(() => api("/genres", { optionalAuth: true }));
   if (!list || !list.genres.length) { wrap.hidden = true; updateShowcaseToolbarVisibility(); return; }
   wrap.hidden = false;
 
   const shelves = await Promise.all(list.genres.map(g =>
-    act(() => api(`/movies?limit=10&sort=recent&genre=${encodeURIComponent(g.genre)}`))
+    act(() => api(`/movies?limit=10&sort=recent&genre=${encodeURIComponent(g.genre)}`, { optionalAuth: true }))
       .then(data => ({ genre: g.genre, movies: data ? data.movies : [] }))
   ));
 
@@ -471,6 +564,40 @@ async function renderRecommendations(rooms, data) {
 }
 $("recommendationsRefreshBtn").onclick = () => renderRecommendations(state.rooms);
 
+/** Вкладка «Друзья» — фильмы, которые оценили/посмотрели друзья
+    (BurningHouse Auth, GET /api/friends), а сам пользователь ещё нет (см.
+    buildFriendsActivity на бэке — то же исключение уже известного, что и у
+    рекомендаций). Друзей и их оценки не скрываем — так и попросили, своего
+    тумблера приватности тут нет. data — уже полученный refreshShowcase ответ
+    (первый рендер не дёргает сеть повторно); без него (повторный заход на
+    вкладку кнопкой) запрашивает сам. Это лента активности, не ранжирование
+    по вкусу — сортировка на бэке уже по свежести отметки друга, поэтому
+    своей кнопки «Обновить», в отличие от рекомендаций, тут нет: каждый
+    заход и так актуален. Вкладка вообще не должна быть видна, если у
+    результата нет фильмов (это решает refreshShowcase), но сама функция на
+    всякий случай тоже не падает, а просто ничего не рисует. */
+async function renderFriendsActivity(rooms, data) {
+  const wrap = $("friendsActivityWrap");
+  const result = data || await act(() => api("/friends/activity"));
+  if (!result || !result.movies.length) { wrap.hidden = true; updateShowcaseToolbarVisibility(); return; }
+  wrap.hidden = false;
+
+  const box = $("friendsActivityList");
+  box.textContent = "";
+  openCardMenu = null;
+  for (const mv of result.movies) {
+    box.append(renderMovieTile(mv, {
+      menu: renderAddToMenu(mv.kinopoiskId, rooms),
+      extraLine: friendsActivitySummary(mv.friendMarks),
+    }));
+  }
+  updateShowcaseToolbarVisibility();
+}
+
+function friendsActivitySummary(friendMarks) {
+  return friendMarks.map(f => f.score != null ? `${f.name} — ${f.score}` : `${f.name} — смотрел(а)`).join(", ");
+}
+
 $("cachedSortSelect").onchange = e => {
   showcaseState.sort = e.target.value;
   showcaseState.offset = 0; // иначе можно улететь на несуществующую страницу новой сортировки
@@ -517,6 +644,10 @@ async function runHomeSearch() {
     refreshShowcase(state.rooms);
     return;
   }
+  // /search — живой запрос к poiskkino.dev (тратит общую квоту), поэтому
+  // остаётся личным маршрутом (см. isPublicGetRoute в server.js) — анониму
+  // тут не смотреть, а сразу предлагаем войти, не дожидаясь 401 с сервера.
+  if (!requireAuth()) return;
   const data = await act(() => api("/search?q=" + encodeURIComponent(q)));
   if (!data) return;
   // Запрос мог устареть, пока летел (строку успели стереть/поменять) —
@@ -658,7 +789,7 @@ function renderMovieTile(mv, opts = {}) {
     в комнату/список»): карточка, с которой модалку открыли, реагирует сразу
     же, не дожидаясь закрытия модалки и тем более следующей полной
     перезагрузки экрана — см. renderMovieTile/openMovieInfoModal выше. */
-function renderMovieInfoModal(mv, rooms, onChange) {
+function renderMovieInfoModal(mv, rooms, onChange, friendsMarks) {
   const year = mv.year ? ` (${mv.year})` : "";
   $("movieInfoModalTitle").textContent = `${mv.title}${year}`;
   const body = $("movieInfoModalBody");
@@ -674,6 +805,7 @@ function renderMovieInfoModal(mv, rooms, onChange) {
       <span class="muted">Ваша оценка</span>
       <div data-act="myRating"></div>
     </div>
+    ${friendsMarksHtml(friendsMarks)}
     <div class="movie-info-sep"></div>
     <div class="movie-detail"></div>
     <div class="row movie-info-actions">
@@ -710,6 +842,18 @@ function renderMovieInfoModal(mv, rooms, onChange) {
   menuWrapBox.append(renderAddToMenu(mv.kinopoiskId, rooms, onChange));
   body.querySelector("#movieInfoWatchBtn").onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
   body.querySelector("#movieInfoKpBtn").onclick = () => window.open(kinopoiskRuUrl(mv.kinopoiskId), "_blank", "noopener");
+  $("movieInfoShareBtn").onclick = () => copyShareLink(mv.kinopoiskId);
+}
+
+/** Копирует ссылку вида .../#/movie/:id в буфер — тот же путь, что открывает
+    route() (см. openSharedMovie). Не личное действие — работает и у анонима,
+    requireAuth() тут не нужен. navigator.clipboard требует https или
+    localhost; в остальных случаях (напр. голый http на неизвестном
+    домене) — теоретическая дыра, но весь BurningHouse и так только на
+    https, отдельный fallback ради этого не заводим. */
+function copyShareLink(kinopoiskId) {
+  const url = `${location.origin}${location.pathname}#/movie/${kinopoiskId}`;
+  act(async () => { await navigator.clipboard.writeText(url); }, "Ссылка скопирована");
 }
 
 /** Открывает модалку «Фильм» для ЛЮБОЙ карточки по всему сервису — очередь/
@@ -726,14 +870,37 @@ function renderMovieInfoModal(mv, rooms, onChange) {
 async function openMovieInfoModal(mv, onChange) {
   const hasSomething = mv.director || (mv.actors && mv.actors.length) || mv.description;
   if (!hasSomething && !mv.__detailsLoaded) {
-    const data = await act(() => api(`/movies/${mv.kinopoiskId}`));
+    const data = await act(() => api(`/movies/${mv.kinopoiskId}`, { optionalAuth: true }));
     if (!data) return;
     Object.assign(mv, data);
     mv.__detailsLoaded = true;
   }
-  const roomsData = await act(() => api("/rooms"));
-  renderMovieInfoModal(mv, roomsData ? roomsData.rooms : [], onChange);
+  // Список комнат и оценки/просмотры друзей — только вошедшему (аноним всё
+  // равно не сможет ничего добавить, а «друзья» — это друзья ЕГО аккаунта,
+  // без входа неоткуда их взять). Незачем ходить за /rooms и тем более
+  // получать на нём 401 просто ради того, чтобы открыть карточку фильма.
+  const authed = auth.isAuthenticated();
+  const [roomsData, friendsData] = await Promise.all([
+    authed ? act(() => api("/rooms")) : Promise.resolve(null),
+    authed ? act(() => api(`/movies/${mv.kinopoiskId}/friends-marks`)) : Promise.resolve(null),
+  ]);
+  renderMovieInfoModal(mv, roomsData ? roomsData.rooms : [], onChange, friendsData ? friendsData.friends : []);
   openModal("movieInfoModalBackdrop");
+}
+
+/** Открывает карточку фильма по расшариваемой ссылке (#/movie/:id, см.
+    route() и кнопку «Поделиться» в модалке — movieInfoShareBtn ниже).
+    Работает без входа: GET /movies/:id — публичный (см. isPublicGetRoute в
+    server.js). Экран под модалкой — обычная главная (showRooms уже сама
+    умеет анонимное состояние, см. там); отдельный «пустой» экран под ссылку
+    не заводим — после закрытия модалки человек просто видит витрину. */
+async function openSharedMovie(kpId) {
+  if (!Number.isFinite(kpId) || kpId <= 0) { location.hash = "#/"; return; }
+  await showRooms();
+  const mv = await act(() => api(`/movies/${kpId}`, { optionalAuth: true }));
+  if (!mv) return;
+  mv.__detailsLoaded = true; // уже полная карточка — не дублировать запрос внутри openMovieInfoModal
+  openMovieInfoModal(mv);
 }
 
 // Пагинация комнат — целиком на фронте (список и так уже загружен целиком
@@ -804,8 +971,13 @@ function goToCode(raw) {
 }
 $("joinCodeBtn").onclick = () => goToCode($("joinCodeInput").value);
 $("joinCodeInput").addEventListener("keydown", e => { if (e.key === "Enter") goToCode(e.target.value); });
-bindModal("createRoomModalBackdrop", "createRoomOpenBtn", "createRoomModalClose");
-bindModal("joinRoomModalBackdrop", "joinRoomOpenBtn", "joinRoomModalClose");
+// Гейт — на самой кнопке открытия, не внутри модалки: анониму незачем даже
+// заполнять форму, чтобы упереться в требование войти в конце (см.
+// requireAuth). bindModal() тут без openBtnId — открытие теперь своё.
+$("createRoomOpenBtn").onclick = () => { if (requireAuth()) openModal("createRoomModalBackdrop"); };
+$("joinRoomOpenBtn").onclick = () => { if (requireAuth()) openModal("joinRoomModalBackdrop"); };
+bindModal("createRoomModalBackdrop", null, "createRoomModalClose");
+bindModal("joinRoomModalBackdrop", null, "joinRoomModalClose");
 
 // ───────────────────────── одна комната ─────────────────────────
 async function openRoom(id) {
@@ -862,6 +1034,19 @@ function movieChipsHtml(mv) {
   if (mv.imdbRating) chips.push(`<span class="chip rating">IMDb ${esc(mv.imdbRating)}</span>`);
   if (mv.avgScore != null) chips.push(`<span class="chip rating">BH ${esc(mv.avgScore)}</span>`);
   return chips.join("");
+}
+
+/** Оценки/просмотры друзей в модалке «Фильм» (GET .../friends-marks, см.
+    openMovieInfoModal) — друзья приходят из BurningHouse Auth, скрывать их
+    не просили: показываем всем сразу, без отдельного тумблера видимости.
+    friendsMarks пуст и у анонима (в модалку туда даже не ходят), и когда
+    друзей просто нет — тогда строка не рисуется вовсе, а не пустая. */
+function friendsMarksHtml(friendsMarks) {
+  if (!friendsMarks || !friendsMarks.length) return "";
+  const parts = friendsMarks.map(f =>
+    f.score != null ? `${esc(f.name)} — ${f.score}` : `${esc(f.name)} — смотрел(а)`
+  );
+  return `<div class="movie-info-friends"><span class="muted">Друзья:</span> ${parts.join(", ")}</div>`;
 }
 
 async function runMovieSearch() {
@@ -1051,15 +1236,21 @@ function renderStarRating(container, kinopoiskId, currentScore, onRated) {
     btn.setAttribute("aria-label", `Оценка ${i} из 10`);
     btn.onmouseenter = () => { paint(i); paintScore(i); };
     btn.onfocus = () => { paint(i); paintScore(i); };
-    btn.onclick = () => act(async () => {
-      const clear = score === i;
-      if (clear) await api(`/movies/${kinopoiskId}/rating`, { method: "DELETE" });
-      else await api(`/movies/${kinopoiskId}/rating`, { method: "PUT", body: { score: i } });
-      score = clear ? 0 : i;
-      paint(score);
-      paintScore(score);
-      if (onRated) onRated(score || null);
-    }, score === i ? "Оценка снята" : "Оценка сохранена");
+    // requireAuth() — до act(), не внутри её колбэка (см. тот же приём и
+    // объяснение в renderAddToMenu) — иначе act() показала бы «Оценка
+    // сохранена», хотя гостя только что увели на вход, ничего не сохранив.
+    btn.onclick = () => {
+      if (!requireAuth()) return;
+      act(async () => {
+        const clear = score === i;
+        if (clear) await api(`/movies/${kinopoiskId}/rating`, { method: "DELETE" });
+        else await api(`/movies/${kinopoiskId}/rating`, { method: "PUT", body: { score: i } });
+        score = clear ? 0 : i;
+        paint(score);
+        paintScore(score);
+        if (onRated) onRated(score || null);
+      }, score === i ? "Оценка снята" : "Оценка сохранена");
+    };
     stars.push(btn);
     container.append(btn);
   }
@@ -1231,31 +1422,45 @@ function renderCardMenu(items, opts = {}) {
     даже не закрывалось после выбора комнаты в пикере. onChange (необязателен,
     зовёт вызывающая карточка — renderMovieTile/renderMovieInfoModal) —
     сигнал «что-то поменялось» для реактивности карточки на месте, без
-    полной перезагрузки экрана. */
+    полной перезагрузки экрана. Пункты видны и анониму (карточка/плитка
+    фильма — публичные), но каждый начинается с requireAuth() — все три
+    действия личные, и без входа делать их некому. */
 function renderAddToMenu(kinopoiskId, rooms, onChange) {
   return renderCardMenu([
     {
       label: "Отметить просмотренным",
-      onClick: () => act(async () => {
-        closeCardMenu();
-        await api(`/movies/${kinopoiskId}/watched`, { method: "POST" });
-        if (onChange) onChange();
-      }, "Отмечено просмотренным"),
+      // requireAuth() — ДО act(), не внутри её колбэка: иначе ранний return
+      // изнутри колбэка выглядел бы для act() обычным успехом, и она всё
+      // равно показала бы «Отмечено просмотренным», хотя ничего не произошло.
+      onClick: () => {
+        if (!requireAuth()) return;
+        act(async () => {
+          closeCardMenu();
+          await api(`/movies/${kinopoiskId}/watched`, { method: "POST" });
+          if (onChange) onChange();
+        }, "Отмечено просмотренным");
+      },
     },
     {
       label: "Добавить в комнату",
-      onClick: menu => renderRoomPicker(menu, kinopoiskId, rooms, () => {
-        closeCardMenu();
-        if (onChange) onChange();
-      }),
+      onClick: menu => {
+        if (!requireAuth()) return;
+        renderRoomPicker(menu, kinopoiskId, rooms, () => {
+          closeCardMenu();
+          if (onChange) onChange();
+        });
+      },
     },
     {
       label: "В личный список",
-      onClick: () => act(async () => {
-        closeCardMenu();
-        await api("/my-list", { method: "POST", body: { kinopoiskId } });
-        if (onChange) onChange();
-      }, "Добавлено в личный список"),
+      onClick: () => {
+        if (!requireAuth()) return;
+        act(async () => {
+          closeCardMenu();
+          await api("/my-list", { method: "POST", body: { kinopoiskId } });
+          if (onChange) onChange();
+        }, "Добавлено в личный список");
+      },
     },
   ]);
 }
@@ -1838,6 +2043,8 @@ async function runGlobalSearch() {
   const q = $("globalSearchInput").value.trim();
   clearTimeout(globalSearchDebounce);
   if (!q) { closeGlobalSearch(); return; }
+  // /search остаётся личным маршрутом — см. тот же комментарий у runHomeSearch.
+  if (!requireAuth()) return;
   const data = await act(() => api("/search?q=" + encodeURIComponent(q)));
   if (!data) return;
   // Запрос мог устареть, пока летел (строку успели стереть/поменять) — не
