@@ -13,5 +13,6 @@ data/
 .DS_Store
 Thumbs.db
 
-# На будущее — зависимостей в сервисе нет, но на всякий случай
+# webtorrent (torrent-engine.js) — единственная npm-зависимость сервиса,
+# ставится через package.json/package-lock.json, не коммитится
 node_modules/

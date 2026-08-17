@@ -156,6 +156,20 @@
   92% { opacity:.9 }
   100%{ transform:translate3d(0,-60vh,0) scale(.7); opacity:0 }
 }
+/* тренажёр: срабатывают на месте, неровными вспышками — нейроны, а не огонь,
+   который куда-то летит. Единственная повадка без выраженного сноса/подъёма. */
+.bh-sparks--flicker .bh-spark{ animation-name:bh-flicker; animation-timing-function:linear }
+@keyframes bh-flicker{
+  0%  { transform:translate3d(0,0,0) scale(.6); opacity:0 }
+  6%  { opacity:.85 }
+  9%  { opacity:.15 }
+  24% { opacity:.9 }
+  27% { opacity:.2 }
+  52% { transform:translate3d(var(--bh-drift,.6rem),-4vh,0) scale(.8); opacity:.85 }
+  55% { opacity:.15 }
+  89% { opacity:.7 }
+  100%{ transform:translate3d(var(--bh-drift,.6rem),-6vh,0) scale(.4); opacity:0 }
+}
 
 /* ═══ ЗНАК ═══
    Градиент объявляется ВНУТРИ каждого <svg>: вынесенный наружу не увидит

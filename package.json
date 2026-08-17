@@ -1,0 +1,12 @@
+{
+  "name": "burninghouse-movies",
+  "private": true,
+  "description": "«Что смотрим» — розыгрыш фильма на вечер (BurningHouse). Единственная npm-зависимость — webtorrent, для потокового просмотра из торрента (см. torrent-engine.js): весь остальной сервис по-прежнему без npm.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "webtorrent": "^3.0.21"
+  }
+}

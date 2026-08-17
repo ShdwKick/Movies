@@ -26,9 +26,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 
 const MOVIES_DIR = path.resolve(fileURLToPath(import.meta.url), "..");
+
+// Единственная npm-зависимость сервиса (webtorrent, см. torrent-engine.js) —
+// ставим сами при первом локальном запуске, чтобы «node dev.mjs» на свежем
+// клоне не падал с MODULE_NOT_FOUND раньше, чем человек прочитает README.
+if (!fs.existsSync(path.join(MOVIES_DIR, "node_modules"))) {
+  console.log("Ставлю зависимости (npm install) — один раз...");
+  execSync("npm install", { cwd: MOVIES_DIR, stdio: "inherit" });
+}
 const AUTH_DIR = process.env.AUTH_DIR || path.join(MOVIES_DIR, "..", "Auth");
 const WORK = path.join(MOVIES_DIR, ".dev");
 const AUTH_PORT = 8788, MOVIES_PORT = 8791;

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * «Что смотрим» — backend розыгрыша фильма на вечер.
- * Чистый Node.js, без внешних зависимостей и без npm install
- * (SQLite — встроенный модуль node:sqlite, ставить нечего).
+ * Почти без внешних зависимостей (SQLite — встроенный модуль node:sqlite,
+ * ставить нечего) — кроме одной осознанной: webtorrent для потокового
+ * просмотра из торрента (см. torrent-engine.js и `npm install`).
  *
  * Аккаунтов здесь нет: вход живёт в общем auth-сервисе (auth.burninghouse.ru),
  * сюда приходит подписанный access-токен, подпись которого проверяется ЛОКАЛЬНО
@@ -34,6 +35,14 @@
  *                  работает как обычно.
  *   POISKKINO_DAILY_CAP (по умолчанию 190) — мягкий потолок обращений в сутки
  *                  (UTC), ниже настоящего лимита провайдера (200/сутки).
+ *   TEST_MAGNET_URI (по умолчанию — Big Buck Bunny, официальный CC-BY фильм
+ *                  Blender Foundation, стандартный тестовый торрент
+ *                  экосистемы WebTorrent) — фаза 1 потокового просмотра
+ *                  (см. стрим-пайплайн, §11): GET /api/stream/test отдаёт
+ *                  именно эту ссылку, без выбора комнаты/фильма — та обвязка
+ *                  появится в следующих фазах.
+ *   TORRENT_DIR    (по умолчанию DATA_DIR/torrents) — куда WebTorrent
+ *                  скачивает файлы.
  */
 "use strict";
 
@@ -45,6 +54,7 @@ const { DatabaseSync } = require("node:sqlite");
 const { checkAdminKey, createAdminLog } = require("./admin-internal");
 const selection = require("./selection");
 const csv = require("./csv");
+const createTorrentEngine = require("./torrent-engine");
 
 const PORT = parseInt(process.env.PORT || "8791", 10);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -52,6 +62,14 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DB_PATH = path.join(DATA_DIR, "store.db");
 const APP_HTML = path.join(__dirname, "index.html");
 const ASSETS_DIR = path.join(__dirname, "assets");
+const TORRENT_DIR = process.env.TORRENT_DIR || path.join(DATA_DIR, "torrents");
+const TEST_MAGNET_URI = process.env.TEST_MAGNET_URI ||
+  "magnet:?xt=urn:btih:dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c&dn=Big+Buck+Bunny" +
+  "&tr=udp%3A%2F%2Fexplodie.org%3A6969&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969" +
+  "&tr=udp%3A%2F%2Ftracker.empire-js.us%3A1337&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969" +
+  "&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=wss%3A%2F%2Ftracker.btorrent.xyz" +
+  "&tr=wss%3A%2F%2Ftracker.fastcast.nz&tr=wss%3A%2F%2Ftracker.openwebtorrent.com" +
+  "&ws=https%3A%2F%2Fwebtorrent.io%2Ftorrents%2F&xs=https%3A%2F%2Fwebtorrent.io%2Ftorrents%2Fbig-buck-bunny.torrent";
 
 const AUTH_ISSUER = (process.env.AUTH_ISSUER || "").replace(/\/+$/, "");
 const AUTH_CLIENT_ID = process.env.AUTH_CLIENT_ID || "movies";
@@ -71,6 +89,8 @@ auth.warmup(); // прогреть кэш ключей, чтобы первый 
 
 // ───────────────────────── хранилище ─────────────────────────
 fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(TORRENT_DIR, { recursive: true });
+const torrentEngine = createTorrentEngine({ downloadDir: TORRENT_DIR });
 
 const db = new DatabaseSync(DB_PATH);
 db.exec("PRAGMA journal_mode = WAL");   // конкурентные чтения не блокируют запись
@@ -1556,6 +1576,70 @@ function serveApp(res) {
   }
 }
 
+// Отдельная от MIME выше карта — та про статику сервиса (JS/CSS/картинки),
+// эта про то, что вообще может прилететь торрентом. Формат тут — вопрос
+// заголовка ответа, не вопрос того, сможет ли браузер это ВОСПРОИЗВЕСТИ
+// (несовместимые кодеки — задача ремукса/транскода, фаза 3 плана, не эта).
+const VIDEO_MIME = {
+  ".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm",
+  ".mkv": "video/x-matroska", ".avi": "video/x-msvideo", ".mov": "video/quicktime",
+};
+
+/**
+ * Фаза 1 стрим-пайплайна (см. план, §4/§11) — отдаёт файл торрента с
+ * поддержкой Range: без него браузер не умеет перематывать <video>, только
+ * проигрывать с начала. torrentEngine.getFile сам ждёт метаданные и держит
+ * уже добавленные торренты в памяти — повторные запросы (а Range-плеер шлёт
+ * их десятками на один и тот же фильм) не переоткрывают торрент заново.
+ *
+ * Тестовый маршрут (GET /api/stream/test, см. ниже) — один фиксированный
+ * TEST_MAGNET_URI, без выбора комнаты/фильма: та обвязка (какой пользователь
+ * что смотрит) появится в фазе 4 вместе с синхронным просмотром.
+ */
+async function serveTorrentStream(req, res, torrentId) {
+  let file;
+  try {
+    file = await torrentEngine.getFile(torrentId);
+  } catch (e) {
+    console.error("torrent-engine:", e);
+    return json(res, 502, { error: "torrent", message: e.message });
+  }
+
+  const total = file.length;
+  const contentType = VIDEO_MIME[path.extname(file.name).toLowerCase()] || "application/octet-stream";
+  const range = req.headers.range;
+
+  let start = 0, end = total - 1, status = 200;
+  if (range) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+    const hasStart = match && match[1] !== "";
+    const hasEnd = match && match[2] !== "";
+    if (!match || (!hasStart && !hasEnd)) {
+      res.writeHead(416, { "Content-Range": `bytes */${total}` });
+      return res.end();
+    }
+    start = hasStart ? parseInt(match[1], 10) : total - parseInt(match[2], 10);
+    end = hasEnd && hasStart ? Math.min(parseInt(match[2], 10), total - 1) : total - 1;
+    if (start < 0 || start > end || start >= total) {
+      res.writeHead(416, { "Content-Range": `bytes */${total}` });
+      return res.end();
+    }
+    status = 206;
+  }
+
+  res.writeHead(status, {
+    "Content-Type": contentType,
+    "Content-Length": end - start + 1,
+    "Accept-Ranges": "bytes",
+    ...(status === 206 ? { "Content-Range": `bytes ${start}-${end}/${total}` } : {}),
+  });
+  const stream = file.createReadStream({ start, end });
+  // Клиент прервал перемотку/закрыл вкладку до конца потока — file-стрим
+  // из WebTorrent надо остановить явно, иначе он продолжит читать в пустоту.
+  res.on("close", () => stream.destroy());
+  stream.pipe(res);
+}
+
 /**
  * Превью приглашения — единственный /api/* эндпоинт, доступный без токена:
  * посмотреть, куда зовут, нужно ДО решения входить ли вообще (человек мог ещё
@@ -2188,6 +2272,14 @@ const server = http.createServer(async (req, res) => {
     const seg = p.split("/").filter(Boolean); // ["api", ...]
     if (seg[0] === "api" && seg[1] === "invite" && seg[2] && req.method === "GET") {
       return await invitePreview(req, res, seg[2]);
+    }
+
+    // Фаза 1 потокового просмотра (см. torrent-engine.js, serveTorrentStream
+    // выше) — тестовый маршрут без плеера и без входа: только доказать, что
+    // сам стрим с Range работает. Личным/платным этот эндпоинт станет в
+    // более поздних фазах, сейчас его смысл — просто прямая ссылка на видео.
+    if (seg[0] === "api" && seg[1] === "stream" && seg[2] === "test" && req.method === "GET") {
+      return await serveTorrentStream(req, res, TEST_MAGNET_URI);
     }
 
     if (p.startsWith("/api/")) {
