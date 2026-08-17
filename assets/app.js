@@ -1347,8 +1347,8 @@ function openRateModal(kinopoiskId, currentScore, onRated) {
 // «Отметить просмотренным»/«Убрать из комнаты» (очередь) и «Вернуть в
 // очередь» (история) переехали сюда из отдельных кнопок (см. планы задач
 // «сетка очереди» и «карточки истории»). В отличие от
-// roomMenu/csvMenu/accountMenu — по одному фиксированному id на всю
-// страницу — карточек в списках может быть много, и у каждой своё меню.
+// roomMenu/csvMenu — по одному фиксированному id на всю страницу — карточек
+// в списках может быть много, и у каждой своё меню.
 // Вместо N независимых обработчиков document-клика держим одно
 // module-level «какое меню сейчас открыто» и подключаем его к тому же
 // общему закрытию (Escape/клик снаружи/открытие другого меню), что и три
@@ -1801,34 +1801,24 @@ document.addEventListener("click", e => {
   if (!menu.contains(e.target) && e.target !== $("csvMenuBtn")) closeCsvMenu();
 });
 
-// Меню профиля (шапка) — тот же паттерн, что у меню комнаты выше: клик
-// открывает/закрывает, клик снаружи и Escape закрывают. Живёт в appbar, а не
-// в конкретной секции, поэтому вешаем рядом, а не внутри renderRoom().
+// Профиль аккаунта (шапка) — раньше был дропдаун-.menu у самой кнопки,
+// теперь окно #accountModalBackdrop по образцу диалога «Профиль» в
+// Финансах (см. index.html): по центру экрана, не якорем у человечка.
+// closeAccountMenu() — по-прежнему так называется, чтобы не переписывать
+// все места, которые её вызывают защитно («на всякий случай закрыть
+// аккаунт», если открывают что-то другое) — теперь просто закрывает модалку.
 function closeAccountMenu() {
-  const menu = $("accountMenu");
-  if (!menu || menu.hidden) return;
-  menu.hidden = true;
-  $("accountBtn").setAttribute("aria-expanded", "false");
+  closeModal("accountModalBackdrop");
 }
-$("accountBtn").onclick = e => {
-  e.stopPropagation();
+bindModal("accountModalBackdrop", null, "accountModalClose");
+$("accountBtn").onclick = () => {
   closeRoomMenu();
   closeCsvMenu();
   closeCardMenu();
-  const menu = $("accountMenu");
-  const willShow = menu.hidden;
-  if (willShow) {
-    $("accountMenuName").textContent = who(state.me);
-    $("accountMenuMeta").textContent = (state.me && state.me.email) || "";
-  }
-  menu.hidden = !willShow;
-  $("accountBtn").setAttribute("aria-expanded", String(willShow));
+  $("accountModalName").textContent = who(state.me);
+  $("accountModalMeta").textContent = (state.me && state.me.email) || "";
+  openModal("accountModalBackdrop");
 };
-document.addEventListener("click", e => {
-  const menu = $("accountMenu");
-  if (!menu || menu.hidden) return;
-  if (!menu.contains(e.target) && e.target !== $("accountBtn")) closeAccountMenu();
-});
 document.addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
   closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCardMenu(); closeGlobalSearch();
@@ -1836,13 +1826,13 @@ document.addEventListener("keydown", e => {
   if (tourActive()) endTour();
 });
 
-$("accountMenuPublicProfile").onclick = () => {
+$("accountModalPublicProfile").onclick = () => {
   closeAccountMenu();
   if (state.me && state.me.username) location.hash = "#/user/" + state.me.username;
 };
-$("accountMenuManage").onclick = () => { closeAccountMenu(); window.open(auth.accountUrl(), "_blank", "noopener"); };
-$("accountMenuLogout").onclick = () => { closeAccountMenu(); auth.logout(); };
-$("accountMenuTour").onclick = () => {
+$("accountModalManage").onclick = () => { closeAccountMenu(); window.open(auth.accountUrl(), "_blank", "noopener"); };
+$("accountModalLogout").onclick = () => { closeAccountMenu(); auth.logout(); };
+$("accountModalTour").onclick = () => {
   closeAccountMenu();
   // Шаги обучения показывают только элементы главной — если сейчас другой
   // экран (комната/watched/…), сперва уводим на «#/» и даём route() время
@@ -3190,7 +3180,7 @@ function renderPublicMoviesInto(container, items, scoreOf) {
 // СРАЗУ при автозапуске (maybeStartTour), а не по завершении — иначе уход
 // с середины (клик по комнате, переход по ссылке) показывал бы тур заново
 // при каждом следующем визите. Повторно посмотреть — «Показать обучение» в
-// меню аккаунта (accountMenuTour выше), тот всегда стартует независимо от
+// окне аккаунта (accountModalTour выше), тот всегда стартует независимо от
 // флага. Все цели шагов — статичная разметка главной, которая есть у любого
 // пользователя сразу после входа, даже без единой комнаты/фильма в кэше
 // (жанровые полки/витрину «Из базы» намеренно не подсвечиваем — у нового
@@ -3224,7 +3214,7 @@ const TOUR_STEPS = [
   {
     target: () => $("accountMenuWrap"),
     title: "Аккаунт и тема",
-    text: "Тема оформления и аккаунт — здесь же. Это обучение можно открыть снова через это меню, если понадобится.",
+    text: "Тема оформления и аккаунт — здесь же. Это обучение можно открыть снова через это окно, если понадобится.",
   },
   {
     title: "Готово",

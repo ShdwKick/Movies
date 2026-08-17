@@ -72,17 +72,14 @@
          app.js) — вместо аккаунта аноним видит эту кнопку, ведёт на тот же
          goLogin(), что и остальные гейты личных действий по сервису. -->
     <button class="btn tonal sm" id="headerLoginBtn" hidden>Войти</button>
+    <!-- Раньше здесь был выпадающий .menu (дропдаун) — теперь по клику
+         открывается модалка #accountModalBackdrop (см. ниже), по образцу
+         диалога «Профиль» в Финансах: не якорем-дропдауном у кнопки, а
+         отдельным окном по центру экрана. -->
     <div class="menu-wrap" id="accountMenuWrap" hidden>
-      <button class="icon-btn" id="accountBtn" title="Аккаунт" aria-label="Аккаунт" aria-haspopup="true" aria-expanded="false">
+      <button class="icon-btn" id="accountBtn" title="Аккаунт" aria-label="Аккаунт" aria-haspopup="dialog">
         <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/></svg>
       </button>
-      <div class="menu" id="accountMenu" hidden>
-        <div class="menu-user"><b id="accountMenuName">—</b><span class="muted" id="accountMenuMeta"></span></div>
-        <button class="menu-item" id="accountMenuPublicProfile">Мой публичный профиль</button>
-        <button class="menu-item" id="accountMenuTour">Показать обучение</button>
-        <button class="menu-item" id="accountMenuManage">Управление аккаунтом →</button>
-        <button class="menu-item danger" id="accountMenuLogout">Выйти</button>
-      </div>
     </div>
   </div>
 </div>
@@ -483,6 +480,35 @@
       </button>
     </div>
     <div id="friendsMarksModalBody"></div>
+  </div>
+</div>
+
+<!-- ===================== МОДАЛКА: АККАУНТ ===================== -->
+<!-- Открывается кликом по человечку в шапке (#accountBtn) — по образцу
+     диалога «Профиль» в Финансах (секции с подписью + полноширинные
+     кнопки), но без резервной копии/сброса данных — тут нет ничего
+     похожего на локальный файл с данными, который имеет смысл
+     экспортировать/сбрасывать. -->
+<div class="modal-backdrop hidden" id="accountModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
+    <div class="modal-head">
+      <h2 id="accountModalTitle">Аккаунт</h2>
+      <button class="icon-btn" id="accountModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="menu-user"><b id="accountModalName">—</b><span class="muted" id="accountModalMeta"></span></div>
+
+    <div class="modal-section-label">Профиль</div>
+    <button class="btn tonal full" id="accountModalPublicProfile">Мой публичный профиль</button>
+
+    <div class="modal-section-label">Обучение</div>
+    <button class="btn tonal full" id="accountModalTour">Показать обучение заново</button>
+
+    <div class="modal-section-label">Аккаунт BurningHouse</div>
+    <button class="btn tonal full" id="accountModalManage">Управление аккаунтом →</button>
+
+    <button class="btn outlined danger full" id="accountModalLogout" style="margin-top:1.1rem">Выйти</button>
   </div>
 </div>
 
