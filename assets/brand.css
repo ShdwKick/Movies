@@ -156,6 +156,42 @@
   92% { opacity:.9 }
   100%{ transform:translate3d(0,-60vh,0) scale(.7); opacity:0 }
 }
+/* тренажёр: доходят до своего места один раз и дальше не летят — только
+   разряжаются на месте частыми вспышками, как нейрон, а не огонь. Кольцо на
+   ::after — это и есть импульс синапса, расходящийся от тела клетки и
+   гаснущий; больше ни у одной повадки кольца нет, только рост/снос точки. */
+.bh-sparks--flicker .bh-spark{ animation-name:bh-flicker; animation-timing-function:linear }
+@keyframes bh-flicker{
+  0%  { transform:translate3d(0,0,0) scale(.5); opacity:0 }
+  5%  { transform:translate3d(var(--bh-drift,.5rem),-20vh,0) scale(.85); opacity:.15 }
+  8%  { opacity:.95 }
+  11% { opacity:.15 }
+  40% { opacity:.15 }
+  43% { opacity:.9 }
+  46% { opacity:.15 }
+  70% { opacity:.15 }
+  73% { opacity:.85 }
+  76% { opacity:.15 }
+  95% { transform:translate3d(var(--bh-drift,.5rem),-20vh,0) scale(.85); opacity:.15 }
+  100%{ transform:translate3d(var(--bh-drift,.5rem),-22vh,0) scale(.3); opacity:0 }
+}
+.bh-sparks--flicker .bh-spark::after{
+  content:""; position:absolute; inset:-6px; border-radius:50%;
+  border:1px solid var(--flame-tip);
+  opacity:0; animation:bh-flicker-ring var(--bh-dur,12s) linear var(--bh-delay,0s) infinite;
+}
+@keyframes bh-flicker-ring{
+  0%,7%  { transform:scale(.6); opacity:0 }
+  9%     { transform:scale(1.3); opacity:.55 }
+  14%    { transform:scale(2.3); opacity:0 }
+  42%    { transform:scale(.6); opacity:0 }
+  44%    { transform:scale(1.3); opacity:.5 }
+  49%    { transform:scale(2.3); opacity:0 }
+  72%    { transform:scale(.6); opacity:0 }
+  74%    { transform:scale(1.3); opacity:.55 }
+  79%    { transform:scale(2.3); opacity:0 }
+  100%   { transform:scale(.6); opacity:0 }
+}
 
 /* ═══ ЗНАК ═══
    Градиент объявляется ВНУТРИ каждого <svg>: вынесенный наружу не увидит
@@ -227,12 +263,15 @@
    Замирает в осмысленном виде, а не в пустоте: искры остаются видимыми,
    свечение — в среднем положении. */
 @media (prefers-reduced-motion: reduce){
-  .bh-glow, .bh-sweep, .bh-spark, .bh-mark .bh-flame,
+  .bh-glow, .bh-sweep, .bh-spark, .bh-spark::after, .bh-mark .bh-flame,
   .bh-leaving, .bh-arriving{
     animation-duration:.01ms !important;
     animation-iteration-count:1 !important;
   }
   .bh-spark{ opacity:.45 }
+  /* Кольцо импульса — эффект самого движения, замирает невидимым, а не
+     точкой-бубликом на месте. */
+  .bh-spark::after{ opacity:0 !important; }
   /* Уходящая карточка не должна остаться невидимой, если анимацию отключили
      до того, как случилась навигация. */
   .bh-leaving{ opacity:1 }
