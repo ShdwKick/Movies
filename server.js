@@ -212,6 +212,26 @@ db.exec(`
     attempts   INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS idx_import_queue_user ON import_queue(user_id);
+
+  -- Локальный справочник «кого мы видели» — username/display_name по
+  -- user_id, для публичного профиля (GET /api/users/:username ниже).
+  -- Auth НЕ отдаёт другим сервисам общий каталог пользователей (см.
+  -- fetchFriends — /api/friends документирован как узкая подсказка, не
+  -- контакты), поэтому своего словаря не избежать. Наполняется пассивно,
+  -- без отдельных походов в сеть: username/name уже едут в JWT-токене
+  -- каждого запроса (см. auth-client.js) — сохраняем их при каждом
+  -- авторизованном обращении (см. знак вызова knownUserUpsert.run ниже по
+  -- файлу) и при каждом fetchFriends (так попадают в словарь и друзья,
+  -- которые сами ещё ни разу к нам не заходили). Тот же приём, что уже
+  -- давно используется у room_members.username/name — просто не привязан к
+  -- конкретной комнате.
+  CREATE TABLE IF NOT EXISTS known_users (
+    user_id      TEXT PRIMARY KEY,
+    username     TEXT NOT NULL,
+    display_name TEXT,
+    updated_at   INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_known_users_username ON known_users(username);
 `);
 // Колонки, появившиеся позже своих таблиц: базы, созданные раньше, о них не
 // знают, а CREATE TABLE IF NOT EXISTS их не тронет. История «когда и кем этот
@@ -356,6 +376,15 @@ const stmt = {
       watched = 1,
       watched_at = COALESCE(movie_marks.watched_at, excluded.watched_at),
       updated_at = excluded.updated_at`),
+  // «Убрать из просмотренных» (случайно нажали «Отметить просмотренным») —
+  // симметрично DELETE .../rating ниже: сбрасывает только watched/watched_at,
+  // score/rated_at не трогает (оценка — независимый факт, см. markSetRating).
+  // Строку из movie_marks не удаляем, даже если после этого она полностью
+  // пустая (watched=0, score=NULL) — то же решение, что и у DELETE .../rating,
+  // отдельный случай под «ничего не осталось» не заводим.
+  markSetUnwatched: db.prepare(`
+    UPDATE movie_marks SET watched = 0, watched_at = NULL, updated_at = ?
+     WHERE user_id = ? AND kinopoisk_id = ?`),
   // Личная оценка — свой апсерт, не трогает watched/watched_at. score=NULL —
   // снятие оценки (DELETE .../rating), watched при этом сознательно не трогаем.
   markSetRating: db.prepare(`
@@ -426,10 +455,29 @@ const stmt = {
            (SELECT AVG(score) FROM movie_marks x WHERE x.kinopoisk_id = pl.kinopoisk_id AND x.score IS NOT NULL) AS avg_score,
            (SELECT COUNT(*) FROM movie_marks x WHERE x.kinopoisk_id = pl.kinopoisk_id AND x.score IS NOT NULL) AS rating_count,
            (SELECT score FROM movie_marks x WHERE x.user_id = pl.user_id AND x.kinopoisk_id = pl.kinopoisk_id) AS my_score,
+           (SELECT watched FROM movie_marks x WHERE x.user_id = pl.user_id AND x.kinopoisk_id = pl.kinopoisk_id) AS my_watched,
            mv.*
       FROM personal_list pl JOIN movies mv ON mv.kinopoisk_id = pl.kinopoisk_id
      WHERE pl.user_id = ?
      ORDER BY pl.added_at DESC`),
+
+  // Справочник known_users (см. таблицу выше) — апсертится при каждом
+  // авторизованном запросе (текущий пользователь) и при каждом fetchFriends
+  // (его друзья), читается публичным GET /api/users/:username.
+  knownUserUpsert: db.prepare(`
+    INSERT INTO known_users (user_id, username, display_name, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      username = excluded.username, display_name = excluded.display_name, updated_at = excluded.updated_at`),
+  knownUserByUsername: db.prepare("SELECT * FROM known_users WHERE username = ?"),
+  // Публичный профиль — «Оценки» (только реально оценённые, не просто
+  // watched — то же разграничение, что «Оценки» на Кинопоиске: это витрина
+  // ЧУЖИХ оценок для постороннего посетителя, а не полная история просмотров).
+  publicRatings: db.prepare(`
+    SELECT mm.score AS mm_score, mm.rated_at AS mm_rated_at, mv.*
+      FROM movie_marks mm JOIN movies mv ON mv.kinopoisk_id = mm.kinopoisk_id
+     WHERE mm.user_id = ? AND mm.score IS NOT NULL
+     ORDER BY mm.rated_at DESC`),
 
   // Очередь импорта (см. import_queue выше и drainImportQueue ниже).
   importQueueInsert: db.prepare(`
@@ -641,6 +689,12 @@ function moviePayload(row) {
     // запрос его подобрал (moviesShowcasePage/personalList ниже), иначе
     // остаётся undefined и не попадает в JSON.
     myScore: row.my_score !== undefined ? row.my_score : undefined,
+    // Тот же приём — есть только у строк, где сам запрос подобрал my_watched
+    // (moviesShowcasePage/personalList ниже); GET /movies/:id вместо этого
+    // просто перезаписывает поле снаружи (см. там), moviePayload там его не
+    // видит вовсе. Нужно фронту, чтобы не предлагать «Отметить
+    // просмотренным» для уже просмотренного (см. renderAddToMenu в app.js).
+    watched: row.my_watched !== undefined ? !!row.my_watched : undefined,
   };
 }
 
@@ -679,12 +733,13 @@ const MOVIES_SORT_ORDER = {
 function moviesShowcasePage(limit, offset, sort, userId, genre) {
   const orderBy = MOVIES_SORT_ORDER[sort] || MOVIES_SORT_ORDER.recent;
   const genreFilter = genre ? "AND EXISTS (SELECT 1 FROM json_each(movies.genres) je WHERE je.value = ?)" : "";
-  const params = genre ? [userId, genre, limit, offset] : [userId, limit, offset];
+  const params = genre ? [userId, userId, genre, limit, offset] : [userId, userId, limit, offset];
   const rows = db.prepare(`
     SELECT movies.*,
            (SELECT AVG(score) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS avg_score,
            (SELECT COUNT(*) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS rating_count,
-           (SELECT score FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_score
+           (SELECT score FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_score,
+           (SELECT watched FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_watched
       FROM movies
      WHERE 1=1 ${genreFilter}
      ORDER BY ${orderBy}
@@ -728,6 +783,17 @@ const RECOMMENDATIONS_MIN_MARKS = 10;
 const RECOMMENDATIONS_POOL_SIZE = 60;
 const RECOMMENDATIONS_SHOW = 24;
 
+// Доп. сигналы поверх жанрового affinity (см. buildRecommendations) — сами
+// по себе кандидата в пул не добавляют, только переупорядочивают уже
+// прошедших жанровый фильтр (score > 0). Веса подобраны так, чтобы жанровый
+// профиль оставался основным сигналом, а не перевешивался парой хороших
+// оценок КП/IMDb или одним друг-фанатом жанра, до которого пользователю дела нет.
+const RECOMMENDATIONS_FRIEND_SCORE_WEIGHT = 0.6; // множитель на (оценка друга − 5.5)
+const RECOMMENDATIONS_FRIEND_WATCHED_BONUS = 1.2; // фикс. бонус, если друг смотрел без оценки
+const RECOMMENDATIONS_QUALITY_WEIGHT = 0.5; // множитель на (среднерейтинг − BASELINE)
+const RECOMMENDATIONS_QUALITY_BASELINE = 6.5; // типичная оценка "нормального" фильма на 10-балльной шкале
+const RECOMMENDATIONS_QUALITY_MIN_MARKS = 3; // меньше — своя avg_score в BH ещё слишком шумная, не берём её в расчёт
+
 function shuffleInPlace(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -755,17 +821,23 @@ function shuffleInPlace(arr) {
  * Кандидаты — все закэшированные фильмы, КРОМЕ уже отмеченных (watched
  * и/или оценённых — то же множество, что построило профиль) и уже лежащих
  * в личном списке: и то, и другое пользователь и так уже знает, рекомендовать
- * нечего. Ранжируем суммой affinity по жанрам фильма, при равенстве — по
- * kp_rating/imdb_rating (не даём случайным фильмам без общественного
- * рейтинга обгонять на пустом фильме с affinity=0). Фильмы с итоговым score
- * ⩽ 0 отбрасываем целиком — это не «слабая рекомендация», а «мы ничего не
- * знаем о том, что вам понравится в этом фильме», что не одно и то же.
+ * нечего. Фильм ПРОХОДИТ отбор только по жанровому affinity (score > 0) —
+ * это не «слабая рекомендация», а «мы ничего не знаем о том, что вам
+ * понравится в этом фильме», что не одно и то же. Прошедших отбор уже
+ * ДОРАНЖИРУЕМ двумя доп. сигналами (см. константы RECOMMENDATIONS_FRIEND_...
+ * и RECOMMENDATIONS_QUALITY_... выше): бонус за то, что друзья (Auth "Друзья")
+ * посмотрели/оценили фильм, и бонус за общий рейтинг (КП, IMDb и, если
+ * накопилось достаточно отметок, наша собственная avg_score) — центрируем
+ * относительно BASELINE, чтобы вознаграждались действительно хорошие
+ * фильмы, а не любые с рейтингом выше нуля. Оба сигнала — только
+ * тай-брейк/переранжирование внутри уже жанрово-релевантного пула, не
+ * замена жанровому профилю.
  *
  * Пересборка — ПОЛНАЯ на каждый вызов, отдельного кэша под неё не заводим
  * (масштаб личного проекта этого не требует, см. аналогичное решение у
  * topGenres/moviesShowcasePage).
  */
-function buildRecommendations(userId, limit) {
+function buildRecommendations(userId, limit, friends = []) {
   const markedRows = db.prepare(`
     SELECT mm.kinopoisk_id, mm.score, m.genres
       FROM movie_marks mm JOIN movies m ON m.kinopoisk_id = mm.kinopoisk_id
@@ -792,17 +864,49 @@ function buildRecommendations(userId, limit) {
       FROM movies
   `).all();
 
+  const friendsByMovie = friendsMarksByMovie(friends);
+
   const scored = [];
   for (const row of allMovies) {
     if (excluded.has(row.kinopoisk_id)) continue;
-    let score = 0;
-    for (const g of JSON.parse(row.genres || "[]")) score += affinity.get(g) || 0;
-    if (score > 0) scored.push({ row, score });
+    let genreScore = 0;
+    for (const g of JSON.parse(row.genres || "[]")) genreScore += affinity.get(g) || 0;
+    if (genreScore <= 0) continue;
+
+    let score = genreScore;
+
+    const friendMarks = friendsByMovie.get(row.kinopoisk_id);
+    if (friendMarks) {
+      for (const fm of friendMarks) {
+        score += fm.score != null
+          ? (fm.score - 5.5) * RECOMMENDATIONS_FRIEND_SCORE_WEIGHT
+          : RECOMMENDATIONS_FRIEND_WATCHED_BONUS;
+      }
+    }
+
+    const quality = qualityRating(row);
+    if (quality != null) score += (quality - RECOMMENDATIONS_QUALITY_BASELINE) * RECOMMENDATIONS_QUALITY_WEIGHT;
+
+    scored.push({ row, score });
   }
   scored.sort((a, b) => b.score - a.score || (b.row.kp_rating || b.row.imdb_rating || 0) - (a.row.kp_rating || a.row.imdb_rating || 0));
 
   const pool = shuffleInPlace(scored.slice(0, RECOMMENDATIONS_POOL_SIZE));
   return { eligible: true, movies: pool.slice(0, limit).map(s => moviePayload(s.row)) };
+}
+
+/** Средний "общий" рейтинг фильма (КП, IMDb, своя avg_score из BH — если по
+    ней накопилось RECOMMENDATIONS_QUALITY_MIN_MARKS+ отметок) — простое
+    среднее того, что есть, без взвешивания источников: расхождение КП/IMDb
+    для одного фильма обычно небольшое, городить нормализацию под личный
+    проект избыточно. null, если вообще нет ни одной оценки ниоткуда. */
+function qualityRating(row) {
+  const parts = [];
+  if (row.kp_rating != null) parts.push(row.kp_rating);
+  if (row.imdb_rating != null) parts.push(row.imdb_rating);
+  if (row.avg_score != null && row.rating_count >= RECOMMENDATIONS_QUALITY_MIN_MARKS) parts.push(row.avg_score);
+  if (!parts.length) return null;
+  return parts.reduce((a, b) => a + b, 0) / parts.length;
 }
 
 // ───────────────────────── друзья (BurningHouse Auth) ─────────────────────────
@@ -826,7 +930,16 @@ async function fetchFriends(req) {
     const res = await fetch(`${AUTH_BASE}/api/friends`, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) return [];
     const data = await res.json();
-    return Array.isArray(data.friends) ? data.friends : [];
+    const friends = Array.isArray(data.friends) ? data.friends : [];
+    // Заодно пополняем known_users (см. таблицу выше) — так друзья, которые
+    // сами ещё ни разу к нам не заходили, всё равно становятся доступны по
+    // публичной ссылке на профиль, как только их увидел хоть один наш
+    // пользователь через «Друзья».
+    const ts = now();
+    for (const f of friends) {
+      if (f.username) stmt.knownUserUpsert.run(f.userId, f.username, f.name || null, ts);
+    }
+    return friends;
   } catch (e) {
     console.error("Auth /api/friends:", e);
     return [];
@@ -849,8 +962,29 @@ function friendsMarksForMovie(kinopoiskId, friends) {
     .filter(f => byUser.has(f.userId))
     .map(f => {
       const r = byUser.get(f.userId);
-      return { name: f.name || f.username, watched: !!r.watched, score: r.score };
+      return { name: f.name || f.username, username: f.username, watched: !!r.watched, score: r.score };
     });
+}
+
+/** То же самое, что friendsMarksForMovie, но сразу по ВСЕМ фильмам одним
+    запросом (kinopoisk_id → массив отметок друзей) — нужна buildRecommendations,
+    чтобы не гонять по запросу на кандидата. Возвращает пустую Map без похода
+    в базу, если друзей нет вовсе (частый случай — не у всех пользователей
+    сервиса вообще есть друзья в Auth). */
+function friendsMarksByMovie(friends) {
+  if (!friends.length) return new Map();
+  const ids = friends.map(f => f.userId);
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db.prepare(`
+    SELECT kinopoisk_id, watched, score FROM movie_marks
+     WHERE user_id IN (${placeholders}) AND (watched = 1 OR score IS NOT NULL)
+  `).all(...ids);
+  const byMovie = new Map();
+  for (const r of rows) {
+    if (!byMovie.has(r.kinopoisk_id)) byMovie.set(r.kinopoisk_id, []);
+    byMovie.get(r.kinopoisk_id).push(r);
+  }
+  return byMovie;
 }
 
 /**
@@ -1455,6 +1589,7 @@ function isPublicGetRoute(seg) {
   if (seg.length === 2 && seg[1] === "movies") return true;   // список/витрина
   if (seg.length === 3 && seg[1] === "movies") return true;   // карточка одного фильма (#/movie/:id)
   if (seg.length === 2 && seg[1] === "genres") return true;
+  if (seg.length === 3 && seg[1] === "users") return true;    // публичный профиль (#/user/:username)
   return false;
 }
 
@@ -1511,7 +1646,8 @@ async function api(req, res, seg, user, query) {
   // фронт по нему прячет вкладку целиком, а не показывает пустой экран.
   if (seg.length === 2 && seg[1] === "recommendations") {
     if (m !== "GET") return json(res, 405, { error: "method not allowed" });
-    return json(res, 200, buildRecommendations(user.id, RECOMMENDATIONS_SHOW));
+    const friends = await fetchFriends(req);
+    return json(res, 200, buildRecommendations(user.id, RECOMMENDATIONS_SHOW, friends));
   }
 
   // ── подборка «Друзья» на главной — см. buildFriendsActivity выше ─
@@ -1531,6 +1667,38 @@ async function api(req, res, seg, user, query) {
     if (!Number.isFinite(kpId) || kpId <= 0) return json(res, 400, { error: "bad kinopoiskId" });
     const friends = await fetchFriends(req);
     return json(res, 200, { friends: friendsMarksForMovie(kpId, friends) });
+  }
+
+  // ── публичный профиль пользователя (#/user/:username) ─────────
+  // Полностью публичный маршрут (см. isPublicGetRoute) — доступен и анониму:
+  // пользователь явно решил не скрывать оценки/список даже от друзей, так
+  // что скрывать их от чужих тем более незачем. username резолвим через
+  // known_users (свой справочник — Auth общего каталога пользователей не
+  // отдаёт, см. комментарий у таблицы), 404 — если ни разу его тут не
+  // видели (не заходил сам и не оказался ничьим другом).
+  if (seg.length === 3 && seg[1] === "users") {
+    if (m !== "GET") return json(res, 405, { error: "method not allowed" });
+    const known = stmt.knownUserByUsername.get(seg[2]);
+    if (!known) return json(res, 404, { error: "not found", message: "Пользователь не найден." });
+    const ratings = stmt.publicRatings.all(known.user_id).map(r => ({
+      ...moviePayload(r), score: r.mm_score, ratedAt: r.mm_rated_at,
+    }));
+    // personalList заодно тянет my_score/my_watched (= оценка/просмотр
+    // ВЛАДЕЛЬЦА профиля, тот же подзапрос, что и у обычного personalList для
+    // себя самого) — на чужом публичном профиле оба поля удаляем:
+    // moviePayload называет их myScore/watched, а тут это не «ваша оценка»/
+    // «вы посмотрели» — этих полей на чужом профиле в ответе быть не должно.
+    const wishlist = stmt.personalList.all(known.user_id).map(r => {
+      const payload = moviePayload(r);
+      delete payload.myScore;
+      delete payload.watched;
+      return { ...payload, addedAt: r.pl_added_at };
+    });
+    return json(res, 200, {
+      username: known.username,
+      name: known.display_name,
+      ratings, wishlist,
+    });
   }
 
   // ── карточка фильма целиком (используется «Подробнее» у результатов
@@ -1555,7 +1723,7 @@ async function api(req, res, seg, user, query) {
     // именно этот эндпоинт — единственное место, где карточка результата
     // поиска (ещё нигде не оценённая с фронта) подтягивает оценку впервые.
     const mark = markSummary(kpId, user ? user.id : null);
-    return json(res, 200, { ...moviePayload(movie), avgScore: mark.avgScore, ratingCount: mark.ratingCount, myScore: mark.myScore });
+    return json(res, 200, { ...moviePayload(movie), avgScore: mark.avgScore, ratingCount: mark.ratingCount, myScore: mark.myScore, watched: mark.watched });
   }
 
   // ── лента «Что мы смотрели» (мои просмотренные, глобально) ───
@@ -1602,15 +1770,25 @@ async function api(req, res, seg, user, query) {
   // (POST /rooms/:id/movies/:kpId/watched). Эффект тот же — movie_marks
   // глобально, плюс убираем фильм из личного списка: он был там как «хочу
   // посмотреть», после этого действия это уже не так.
+  // DELETE — отмена (см. markSetUnwatched выше): случайно нажали в меню
+  // «Отметить просмотренным», нужно убрать без похода в комнату. Обратно в
+  // личный список фильм не возвращаем — это было бы уже не «отмена», а
+  // отдельное действие, пользователь явно об этом не просил.
   if (seg.length === 4 && seg[1] === "movies" && seg[3] === "watched") {
-    if (m !== "POST") return json(res, 405, { error: "method not allowed" });
     const kpId = parseInt(seg[2], 10);
     if (!Number.isFinite(kpId)) return json(res, 400, { error: "bad kinopoiskId" });
     if (!stmt.movieByKpId.get(kpId)) return json(res, 404, { error: "not found" });
-    const ts = now();
-    stmt.markSetWatched.run(user.id, kpId, ts, ts);
-    stmt.personalListDelete.run(user.id, kpId);
-    return json(res, 200, { mark: markPayload(stmt.markGet.get(user.id, kpId)) });
+    if (m === "POST") {
+      const ts = now();
+      stmt.markSetWatched.run(user.id, kpId, ts, ts);
+      stmt.personalListDelete.run(user.id, kpId);
+      return json(res, 200, { mark: markPayload(stmt.markGet.get(user.id, kpId)) });
+    }
+    if (m === "DELETE") {
+      stmt.markSetUnwatched.run(now(), user.id, kpId);
+      return json(res, 200, { mark: markPayload(stmt.markGet.get(user.id, kpId)) });
+    }
+    return json(res, 405, { error: "method not allowed" });
   }
 
   // ── личный список на просмотр (глобально, без привязки к комнате) ─
@@ -2027,6 +2205,12 @@ const server = http.createServer(async (req, res) => {
       if (!user && !(req.method === "GET" && isPublicGetRoute(seg))) {
         return json(res, 401, { error: "unauthorized" });
       }
+      // Пополняем known_users (см. таблицу выше) текущим пользователем — без
+      // отдельного похода в сеть, username/name уже есть в декодированном
+      // токене. Один лишний UPSERT на авторизованный запрос, зато публичный
+      // профиль сразу доступен по ссылке даже тем, у кого пока нет друзей в
+      // сервисе (единственный другой источник словаря — fetchFriends).
+      if (user && user.username) stmt.knownUserUpsert.run(user.id, user.username, user.name || null, now());
       return await api(req, res, seg, user, url.searchParams);
     }
 

@@ -78,6 +78,7 @@
       </button>
       <div class="menu" id="accountMenu" hidden>
         <div class="menu-user"><b id="accountMenuName">—</b><span class="muted" id="accountMenuMeta"></span></div>
+        <button class="menu-item" id="accountMenuPublicProfile">Мой публичный профиль</button>
         <button class="menu-item" id="accountMenuTour">Показать обучение</button>
         <button class="menu-item" id="accountMenuManage">Управление аккаунтом →</button>
         <button class="menu-item danger" id="accountMenuLogout">Выйти</button>
@@ -296,6 +297,32 @@
   <div class="movie-grid" id="profileMyListItems"></div>
 </section>
 
+<!-- ===================== ПУБЛИЧНЫЙ ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ =====================
+     #/user/:username — доступен всем, включая анонимных посетителей (см.
+     GET /api/users/:username в server.js). Ориентир по духу — страница
+     пользователя на Кинопоиске (аватар-заглушка+имя, «Оценки», «Хочет
+     посмотреть»), без копирования один в один: тот же .movie-grid и те же
+     плитки, что и везде в сервисе, просто без меню действий — чужой
+     профиль только смотрят, а не редактируют. -->
+<section id="publicProfileView" hidden>
+  <a class="backlink" href="#/">← На главную</a>
+  <div class="public-profile-head">
+    <div class="avatar" id="publicProfileAvatar"></div>
+    <div>
+      <h1 id="publicProfileName">—</h1>
+      <p class="muted" id="publicProfileUsername"></p>
+    </div>
+  </div>
+
+  <h2>Оценки</h2>
+  <p class="muted" id="publicProfileRatingsEmpty">Пока ничего не оценено.</p>
+  <div class="movie-grid" id="publicProfileRatingsList"></div>
+
+  <h2>Хочет посмотреть</h2>
+  <p class="muted" id="publicProfileWishlistEmpty">Список пуст.</p>
+  <div class="movie-grid" id="publicProfileWishlistList"></div>
+</section>
+
 <!-- ===================== ОДНА КОМНАТА ===================== -->
 <section id="roomView" hidden>
   <a class="backlink" href="#/">← Все комнаты</a>
@@ -439,6 +466,23 @@
     <div class="row" id="rateModalActions">
       <button class="btn filled" id="rateModalDoneBtn" type="button">Готово</button>
     </div>
+  </div>
+</div>
+
+<!-- ===================== МОДАЛКА: ОЦЕНКИ ДРУЗЕЙ ===================== -->
+<!-- Открывается кнопкой «ещё N» в блоке «Друзья» модалки «Фильм» — там
+     инлайн показываются только первые FRIENDS_MARKS_INLINE_LIMIT, полный
+     список друзей, которые посмотрели/оценили этот фильм — тут
+     (openFriendsMarksModal в app.js). -->
+<div class="modal-backdrop hidden" id="friendsMarksModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="friendsMarksModalTitle">
+    <div class="modal-head">
+      <h2 id="friendsMarksModalTitle">Оценки друзей</h2>
+      <button class="icon-btn" id="friendsMarksModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div id="friendsMarksModalBody"></div>
   </div>
 </div>
 

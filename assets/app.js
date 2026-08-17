@@ -234,7 +234,7 @@ function requireAuth() {
 }
 
 function showOnly(id) {
-  for (const v of ["authView", "roomsView", "roomView", "drawView", "joinView", "watchedView", "myListView", "profileView"]) $(v).hidden = v !== id;
+  for (const v of ["authView", "roomsView", "roomView", "drawView", "joinView", "watchedView", "myListView", "profileView", "publicProfileView"]) $(v).hidden = v !== id;
   // Пламя как фон целой страницы допустимо только на экране «нужен вход»
   // (см. BurningHouse/Design/palette.md) — на всех остальных экранах фон
   // нейтральный (--md-sys-color-surface).
@@ -258,6 +258,9 @@ async function route() {
   const draw = hash.match(/^#\/room\/([0-9a-f-]{36})\/draw/i);
   const room = hash.match(/^#\/room\/([0-9a-f-]{36})$/i);
   const movie = hash.match(/^#\/movie\/(\d+)/);
+  // Тот же набор символов, что USERNAME_RE в Auth/lib/passwords.js —
+  // логин там латиница/цифры/._- длиной 3–32.
+  const pubUser = hash.match(/^#\/user\/([A-Za-z0-9_.-]+)/);
 
   if (join) return showJoin(join[1].toUpperCase());
   if (draw) return showDraw(draw[1]);
@@ -267,6 +270,7 @@ async function route() {
   if (hash === "#/my-list") return showMyList();
   if (hash === "#/profile") return showProfile();
   if (movie) return openSharedMovie(parseInt(movie[1], 10));
+  if (pubUser) return showPublicProfile(pubUser[1]);
   return showRooms();
 }
 addEventListener("hashchange", () => { closeGlobalSearch(); route().catch(console.error); });
@@ -304,7 +308,11 @@ async function showRooms() {
   }
   renderRooms();
   refreshShowcase(state.rooms);
-  maybeStartTour();
+  // Автотур — только вошедшим: анонимному посетителю рано объяснять
+  // комнаты/личные списки, которых у него ещё нет, а TOUR_DONE_KEY один на
+  // браузер — если поставить его анонимному визиту, вошедший позже тем же
+  // браузером человек тур уже не увидит вовсе (см. maybeStartTour).
+  if (authed) maybeStartTour();
 }
 
 /** Общая точка входа для витрины «Из базы» — решает, есть ли вообще жанры,
@@ -451,7 +459,7 @@ async function renderCachedMovies(rooms) {
   openCardMenu = null; // старые плитки со своими меню-«…» уходят целиком
   if (!data.movies.length) box.append(el("p", "muted", "По этому жанру пока пусто."));
   for (const mv of data.movies) {
-    box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv.kinopoiskId, rooms) }));
+    box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv, rooms) }));
   }
 
   // Пейджер прячется целиком, если всё помещается на одну страницу — но
@@ -529,7 +537,7 @@ function renderGenreShelf(genre, movies, rooms) {
 
   const row = el("div", "genre-shelf-row");
   for (const mv of movies) {
-    row.append(renderMovieTile(mv, { menu: renderAddToMenu(mv.kinopoiskId, rooms) }));
+    row.append(renderMovieTile(mv, { menu: renderAddToMenu(mv, rooms) }));
   }
   section.append(row);
   return section;
@@ -558,7 +566,7 @@ async function renderRecommendations(rooms, data) {
   openCardMenu = null; // старые плитки со своими меню-«…» уходят целиком
   $("recommendationsEmpty").hidden = result.movies.length > 0;
   for (const mv of result.movies) {
-    box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv.kinopoiskId, rooms) }));
+    box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv, rooms) }));
   }
   updateShowcaseToolbarVisibility();
 }
@@ -587,7 +595,7 @@ async function renderFriendsActivity(rooms, data) {
   openCardMenu = null;
   for (const mv of result.movies) {
     box.append(renderMovieTile(mv, {
-      menu: renderAddToMenu(mv.kinopoiskId, rooms),
+      menu: renderAddToMenu(mv, rooms),
       extraLine: friendsActivitySummary(mv.friendMarks),
     }));
   }
@@ -839,10 +847,14 @@ function renderMovieInfoModal(mv, rooms, onChange, friendsMarks) {
   // ним просто некуда раскрыть .menu, не вылезая за левый край окна.
   const menuWrapBox = $("movieInfoModalMenuWrap");
   menuWrapBox.textContent = "";
-  menuWrapBox.append(renderAddToMenu(mv.kinopoiskId, rooms, onChange));
+  menuWrapBox.append(renderAddToMenu(mv, rooms, onChange));
   body.querySelector("#movieInfoWatchBtn").onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
   body.querySelector("#movieInfoKpBtn").onclick = () => window.open(kinopoiskRuUrl(mv.kinopoiskId), "_blank", "noopener");
   $("movieInfoShareBtn").onclick = () => copyShareLink(mv.kinopoiskId);
+  // Кнопки может не быть — friendsMarksHtml рисует её, только если друзей
+  // больше FRIENDS_MARKS_INLINE_LIMIT (см. там).
+  const moreFriendsBtn = body.querySelector('[data-act="friendsMarksMoreBtn"]');
+  if (moreFriendsBtn) moreFriendsBtn.onclick = () => openFriendsMarksModal(friendsMarks);
 }
 
 /** Копирует ссылку вида .../#/movie/:id в буфер — тот же путь, что открывает
@@ -1036,6 +1048,19 @@ function movieChipsHtml(mv) {
   return chips.join("");
 }
 
+// Инлайн в карточке фильма показываем только первых стольких друзей — при
+// большом числе общих друзей строка «Друзья: …» иначе растягивалась бы на
+// половину модалки. Остальные — по кнопке «ещё N», см. openFriendsMarksModal.
+const FRIENDS_MARKS_INLINE_LIMIT = 2;
+
+// Ссылка на публичный профиль друга (#/user/:username) — username есть
+// почти всегда (см. friendsMarksForMovie в server.js), но на всякий случай
+// отдаём просто текст, если его вдруг нет.
+function friendsMarkHtml(f) {
+  const name = f.username ? `<a href="#/user/${esc(f.username)}">${esc(f.name)}</a>` : esc(f.name);
+  return f.score != null ? `${name} — ${f.score}` : `${name} — смотрел(а)`;
+}
+
 /** Оценки/просмотры друзей в модалке «Фильм» (GET .../friends-marks, см.
     openMovieInfoModal) — друзья приходят из BurningHouse Auth, скрывать их
     не просили: показываем всем сразу, без отдельного тумблера видимости.
@@ -1043,10 +1068,22 @@ function movieChipsHtml(mv) {
     друзей просто нет — тогда строка не рисуется вовсе, а не пустая. */
 function friendsMarksHtml(friendsMarks) {
   if (!friendsMarks || !friendsMarks.length) return "";
-  const parts = friendsMarks.map(f =>
-    f.score != null ? `${esc(f.name)} — ${f.score}` : `${esc(f.name)} — смотрел(а)`
-  );
-  return `<div class="movie-info-friends"><span class="muted">Друзья:</span> ${parts.join(", ")}</div>`;
+  const shown = friendsMarks.slice(0, FRIENDS_MARKS_INLINE_LIMIT);
+  const rest = friendsMarks.length - shown.length;
+  const parts = shown.map(friendsMarkHtml);
+  // data-act, не id — friendsMarksHtml зовётся при каждой перерисовке
+  // модалки под ЛЮБОЙ фильм, второй такой же id в DOM был бы ошибкой.
+  const moreBtn = rest > 0 ? ` <button type="button" data-act="friendsMarksMoreBtn">ещё ${rest}</button>` : "";
+  return `<div class="movie-info-friends"><span class="muted">Друзья:</span> ${parts.join(", ")}${moreBtn}</div>`;
+}
+
+/** Полный список — по кнопке «ещё N» (см. friendsMarksHtml выше). Отдельное
+    маленькое окошко, а не разворачивание строки на месте — при большом
+    числе друзей список стал бы длиннее самой модалки «Фильм». */
+function openFriendsMarksModal(friendsMarks) {
+  $("friendsMarksModalBody").innerHTML =
+    `<ul class="friends-marks-list">${friendsMarks.map(f => `<li>${friendsMarkHtml(f)}</li>`).join("")}</ul>`;
+  openModal("friendsMarksModalBackdrop");
 }
 
 async function runMovieSearch() {
@@ -1424,23 +1461,57 @@ function renderCardMenu(items, opts = {}) {
     сигнал «что-то поменялось» для реактивности карточки на месте, без
     полной перезагрузки экрана. Пункты видны и анониму (карточка/плитка
     фильма — публичные), но каждый начинается с requireAuth() — все три
-    действия личные, и без входа делать их некому. */
-function renderAddToMenu(kinopoiskId, rooms, onChange) {
-  return renderCardMenu([
-    {
-      label: "Отметить просмотренным",
-      // requireAuth() — ДО act(), не внутри её колбэка: иначе ранний return
-      // изнутри колбэка выглядел бы для act() обычным успехом, и она всё
-      // равно показала бы «Отмечено просмотренным», хотя ничего не произошло.
-      onClick: () => {
-        if (!requireAuth()) return;
-        act(async () => {
-          closeCardMenu();
-          await api(`/movies/${kinopoiskId}/watched`, { method: "POST" });
-          if (onChange) onChange();
-        }, "Отмечено просмотренным");
-      },
-    },
+    действия личные, и без входа делать их некому.
+    Принимает mv целиком (не голый kinopoiskId) — нужен mv.watched, чтобы не
+    предлагать «Отметить просмотренным» для уже просмотренного (баг:
+    повторная отметка была не запрещена, просто бессмысленна). mv.watched
+    есть не у всех источников списков (см. watched-поле в moviePayload на
+    бэке) — там, где его нет (undefined), считаем «не просмотрено», как и
+    раньше. После успешного переключения ПЕРЕСТРАИВАЕМ весь .menu-wrap
+    заново (rerenderMenu, wrap.replaceWith(...)) — просто мутировать
+    mv.watched недостаточно: renderCardMenu держит список пунктов меню
+    статичным массивом, собранным один раз при первом открытии
+    (renderItems() при каждом открытии просто перерисовывает те же самые
+    объекты items заново, не переоценивая условие watchedItem?.label) —
+    без пересборки той же карточке, открытой второй раз без перезагрузки
+    списка, метка так и осталась бы старой (сам этот баг всплыл при
+    проверке фикса). */
+function renderAddToMenu(mv, rooms, onChange) {
+  const kinopoiskId = mv.kinopoiskId;
+  let wrap;
+  const rerenderMenu = () => { wrap.replaceWith(renderAddToMenu(mv, rooms, onChange)); };
+  const watchedItem = mv.watched
+    ? {
+        label: "Убрать из просмотренных", danger: true,
+        onClick: () => {
+          if (!requireAuth()) return;
+          act(async () => {
+            closeCardMenu();
+            await api(`/movies/${kinopoiskId}/watched`, { method: "DELETE" });
+            mv.watched = false;
+            rerenderMenu();
+            if (onChange) onChange();
+          }, "Убрано из просмотренных");
+        },
+      }
+    : {
+        label: "Отметить просмотренным",
+        // requireAuth() — ДО act(), не внутри её колбэка: иначе ранний return
+        // изнутри колбэка выглядел бы для act() обычным успехом, и она всё
+        // равно показала бы «Отмечено просмотренным», хотя ничего не произошло.
+        onClick: () => {
+          if (!requireAuth()) return;
+          act(async () => {
+            closeCardMenu();
+            await api(`/movies/${kinopoiskId}/watched`, { method: "POST" });
+            mv.watched = true;
+            rerenderMenu();
+            if (onChange) onChange();
+          }, "Отмечено просмотренным");
+        },
+      };
+  wrap = renderCardMenu([
+    watchedItem,
     {
       label: "Добавить в комнату",
       onClick: menu => {
@@ -1463,6 +1534,7 @@ function renderAddToMenu(kinopoiskId, rooms, onChange) {
       },
     },
   ]);
+  return wrap;
 }
 
 // Карточка очереди — только queued (watched теперь отдельным списком в
@@ -1764,6 +1836,10 @@ document.addEventListener("keydown", e => {
   if (tourActive()) endTour();
 });
 
+$("accountMenuPublicProfile").onclick = () => {
+  closeAccountMenu();
+  if (state.me && state.me.username) location.hash = "#/user/" + state.me.username;
+};
 $("accountMenuManage").onclick = () => { closeAccountMenu(); window.open(auth.accountUrl(), "_blank", "noopener"); };
 $("accountMenuLogout").onclick = () => { closeAccountMenu(); auth.logout(); };
 $("accountMenuTour").onclick = () => {
@@ -1826,6 +1902,10 @@ bindModal("movieInfoModalBackdrop", null, "movieInfoModalClose");
 // «Готово» просто закрывает: сама оценка уже сохранена кликом по звезде.
 bindModal("rateModalBackdrop", null, "rateModalClose");
 $("rateModalDoneBtn").onclick = () => closeModal("rateModalBackdrop");
+
+// Модалка «Оценки друзей» — открывается кнопкой «ещё N» в модалке «Фильм»
+// (см. openFriendsMarksModal выше), своей кнопки-открывашки нет.
+bindModal("friendsMarksModalBackdrop", null, "friendsMarksModalClose");
 
 // ───────────────────────── импорт из IMDb (страница «Мои фильмы») ─────────────────────────
 // Тело — сырой текст CSV-файла, тот же приём, что и у importCsvInput (импорт
@@ -2880,7 +2960,7 @@ async function showProfile() {
     // этом файле ($("watchedEmpty").hidden = ...), !important гарантированно
     // выигрывает у любого компонентного класса.
     $("profileWatchedMoreBtn").hidden = watched.movies.length <= PROFILE_PREVIEW_LIMIT;
-    renderWatchedInto($("profileWatchedList"), watched.movies.slice(0, PROFILE_PREVIEW_LIMIT));
+    renderWatchedInto($("profileWatchedList"), watched.movies.slice(0, PROFILE_PREVIEW_LIMIT), showProfile);
   }
   if (myList) {
     $("profileMyListEmpty").hidden = myList.movies.length > 0;
@@ -2900,15 +2980,22 @@ async function showWatched() {
   const data = await act(() => api("/watched"));
   if (!data) return;
   $("watchedEmpty").hidden = data.movies.length > 0;
-  renderWatchedInto($("watchedList"), data.movies);
+  renderWatchedInto($("watchedList"), data.movies, showWatched);
 }
 
 // Тонкая обёртка вокруг renderMovieTile — своё тут только меню («Добавить в
-// комнату», подгружает список комнат лениво при открытии) и merge personal
-// myScore в mv: watchedList на бэке отдаёт его отдельным полем it.myScore
-// (не внутри moviePayload — там уже занято avgScore/ratingCount из того же
-// подзапроса), renderMovieTile/openMovieInfoModal читают его прямо с mv.
-function renderWatchedInto(container, items) {
+// комнату», подгружает список комнат лениво при открытии; «Убрать из
+// просмотренных» — на случай случайного клика по «Отметить просмотренным»,
+// DELETE .../watched на бэке сбрасывает только watched, оценку не трогает)
+// и merge personal myScore в mv: watchedList на бэке отдаёт его отдельным
+// полем it.myScore (не внутри moviePayload — там уже занято
+// avgScore/ratingCount из того же подзапроса), renderMovieTile/
+// openMovieInfoModal читают его прямо с mv.
+// onChange — перечитать список после «Убрать из просмотренных», тот же
+// приём, что у renderMyListInto («Убрать из списка»): вызывающая сторона
+// решает, что перечитывать (showWatched — полный список, showProfile —
+// превью), сама функция об этом не знает.
+function renderWatchedInto(container, items, onChange) {
   container.textContent = "";
   for (const it of items) {
     const mv = Object.assign(it.movie, { myScore: it.myScore });
@@ -2922,6 +3009,14 @@ function renderWatchedInto(container, items) {
           menu.innerHTML = "";
           renderRoomPicker(menu, mv.kinopoiskId, data.rooms, () => closeCardMenu());
         },
+      },
+      {
+        label: "Убрать из просмотренных", danger: true,
+        onClick: () => act(async () => {
+          closeCardMenu();
+          await api(`/movies/${mv.kinopoiskId}/watched`, { method: "DELETE" });
+          if (onChange) await onChange();
+        }, "Убрано из просмотренных"),
       },
     ]);
     container.append(renderMovieTile(mv, { menu }));
@@ -2960,19 +3055,39 @@ function renderMyListInto(container, items, onChange) {
   container.textContent = "";
   for (const it of items) {
     const mv = it.movie;
+    // Обычно фильм в личном списке ещё не просмотрен (глобальная отметка
+    // «просмотрено» сама убирает его отсюда — см. GET /movies/:id/watched на
+    // бэке), НО: если его отметили просмотренным через комнату (POST
+    // /rooms/:id/movies/:kpId/watched — тот путь personal_list не трогает,
+    // это два разных факта, см. комментарий там), запись тут переживает
+    // просмотр. mv.watched (см. personalList в server.js) — на этот случай:
+    // тогда предлагаем снять отметку, а не поставить её повторно (баг,
+    // с которого начался этот тред: «Отметить просмотренным» было видно и
+    // для уже просмотренного).
+    const watchedItem = mv.watched
+      ? {
+          label: "Убрать из просмотренных", danger: true,
+          onClick: () => act(async () => {
+            closeCardMenu();
+            await api(`/movies/${mv.kinopoiskId}/watched`, { method: "DELETE" });
+            mv.watched = false;
+            await onChange();
+          }, "Убрано из просмотренных"),
+        }
+      : {
+          label: "Отметить просмотренным",
+          // Тот же глобальный эндпоинт, что и у «Отметить просмотренным» на
+          // экране розыгрыша (см. showDrawResult) — сам убирает фильм из
+          // личного списка на сервере, onChange() тут просто перечитывает
+          // список, чтобы карточка пропала и с экрана.
+          onClick: () => act(async () => {
+            closeCardMenu();
+            await api(`/movies/${mv.kinopoiskId}/watched`, { method: "POST" });
+            await onChange();
+          }, "Отмечено просмотренным"),
+        };
     const menu = renderCardMenu([
-      {
-        label: "Отметить просмотренным",
-        // Тот же глобальный эндпоинт, что и у «Отметить просмотренным» на
-        // экране розыгрыша (см. showDrawResult) — сам убирает фильм из
-        // личного списка на сервере, onChange() тут просто перечитывает
-        // список, чтобы карточка пропала и с экрана.
-        onClick: () => act(async () => {
-          closeCardMenu();
-          await api(`/movies/${mv.kinopoiskId}/watched`, { method: "POST" });
-          await onChange();
-        }, "Отмечено просмотренным"),
-      },
+      watchedItem,
       {
         label: "Добавить в комнату",
         onClick: async menu => {
@@ -2993,6 +3108,78 @@ function renderMyListInto(container, items, onChange) {
       },
     ]);
     container.append(renderMovieTile(mv, { menu, onChange }));
+  }
+}
+
+// ───────────────────────── публичный профиль пользователя ─────────────────────────
+// #/user/:username — см. GET /api/users/:username в server.js. Полностью
+// публичный маршрут, работает и для анонимного посетителя (optionalAuth) —
+// пользователь явно решил не скрывать оценки/список ни от друзей, ни от
+// посторонних (см. обсуждение фичи «Друзья»).
+async function showPublicProfile(username) {
+  // Ссылка на профиль может прийти прямо из открытой модалки «Фильм» или из
+  // модалки «Оценки друзей» поверх неё (см. friendsMarksHtml/
+  // openFriendsMarksModal) — закрываем обе, иначе публичный профиль
+  // отрисуется ПОД всё ещё открытым бэкдропом.
+  closeModal("friendsMarksModalBackdrop");
+  closeModal("movieInfoModalBackdrop");
+  showOnly("publicProfileView");
+  const data = await act(() => api(`/users/${encodeURIComponent(username)}`, { optionalAuth: true }));
+  if (!data) { location.hash = "#/"; return; }
+  document.title = `Что смотрим? — ${data.name || data.username}`;
+  $("publicProfileAvatar").textContent = (data.name || data.username || "?")[0].toUpperCase();
+  $("publicProfileName").textContent = data.name || data.username;
+  $("publicProfileUsername").textContent = "@" + data.username;
+  $("publicProfileRatingsEmpty").hidden = data.ratings.length > 0;
+  $("publicProfileWishlistEmpty").hidden = data.wishlist.length > 0;
+  renderPublicMoviesInto($("publicProfileRatingsList"), data.ratings, mv => mv.score);
+  renderPublicMoviesInto($("publicProfileWishlistList"), data.wishlist, () => null);
+}
+
+/** Плитки чужого профиля — тот же .movie-tile, что и везде, но БЕЗ меню
+    действий (тут нечем управлять — не свой список) и со своим кружком
+    оценки (.public-rating-badge — см. styles.css): mv.myScore на плитке
+    means «ваша оценка», а тут кружок должен показывать оценку ВЛАДЕЛЬЦА
+    профиля, поэтому renderMovieTile/renderRatingBadge (интерактивные, свои)
+    тут не подходят — рисуем сами. Клик по плитке всё равно открывает
+    обычную модалку «Фильм» (renderMovieInfoModal) — это нормально, там речь
+    уже о ВАШЕМ отношении к фильму (расставить свою оценку и т.п.), не о
+    хозяине профиля. */
+function renderPublicMoviesInto(container, items, scoreOf) {
+  container.textContent = "";
+  for (const mv of items) {
+    const tile = el("div", "movie-tile");
+    tile.setAttribute("role", "button");
+    tile.tabIndex = 0;
+    tile.innerHTML = `
+      <div class="movie-tile-poster-wrap">
+        ${mv.posterUrl ? `<img class="movie-poster" src="${esc(mv.posterUrl)}" alt="">` : '<div class="movie-poster"></div>'}
+      </div>
+      <div class="movie-tile-title-row">
+        <div class="movie-tile-title-col">
+          <div class="title">${esc(mv.title)}</div>
+          ${mv.year ? `<div class="muted sub">${esc(mv.year)}</div>` : ""}
+        </div>
+      </div>`;
+    const score = scoreOf(mv);
+    if (score != null) {
+      const badge = el("div", "public-rating-badge", String(score));
+      tile.querySelector(".movie-tile-poster-wrap").append(badge);
+    }
+    // Открываем модалку по МИНИМАЛЬНОМУ объекту (только kinopoiskId), не
+    // готовым mv с этой плитки: у mv тут уже есть director/actors/description
+    // (из публичного профиля), так что openMovieInfoModal решила бы, что
+    // подробности уже загружены (см. hasSomething там), и пропустила бы
+    // собственный GET /movies/:id — а это ЕДИНСТВЕННЫЙ источник ВАШЕЙ
+    // (не владельца профиля) оценки этого фильма, myScore. Без такого
+    // фетча звёзды в модалке показали бы «не оценено», даже если вы сами
+    // этот фильм уже оценили.
+    const openInfo = () => openMovieInfoModal({ kinopoiskId: mv.kinopoiskId });
+    tile.onclick = () => openInfo();
+    tile.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openInfo(); }
+    });
+    container.append(tile);
   }
 }
 

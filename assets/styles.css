@@ -577,6 +577,16 @@ select{
    — обычная строка текста под шкалой оценки, без своих чипов: список может
    быть длинным (много друзей), чипами на всех места не напасёшься. */
 .movie-info-friends{margin-top:.5rem;font-size:13px;color:var(--md-sys-color-on-surface-variant)}
+/* «ещё N» (см. FRIENDS_MARKS_INLINE_LIMIT в app.js) — выглядит как ссылка,
+   не как обычная кнопка: часть строки текста, не отдельный элемент управления. */
+.movie-info-friends button{
+  background:none;border:0;padding:0;font:inherit;font-size:13px;
+  color:var(--md-sys-color-primary);text-decoration:underline;cursor:pointer;
+}
+/* Полный список в модалке «Оценки друзей» (openFriendsMarksModal) — просто
+   по строке на друга, без постеров/чипов: тут это список людей, не фильмов. */
+.friends-marks-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.5rem}
+.friends-marks-list li{font-size:14px}
 .movie-info-sep{height:1px;background:var(--md-sys-color-outline-variant);margin:.9rem 0}
 /* «Смотреть»/«Страница на Кинопоиске» — рядом друг с другом, поровну делят
    ширину (flex:1 у каждой), а не одна крупная и одна с текстом впритык. */
@@ -623,6 +633,26 @@ select{
    .menu-wrap каждый раз перевставляется заново в renderMovieInfoModal. */
 .modal-head-actions{display:flex;align-items:center;gap:.1rem}
 .modal-head-actions .menu-wrap{margin-top:0}
+
+/* ===================== ПУБЛИЧНЫЙ ПРОФИЛЬ ===================== */
+.public-profile-head{display:flex;align-items:center;gap:16px;margin:1.5rem 0}
+.avatar{
+  width:56px;height:56px;border-radius:50%;display:grid;place-items:center;
+  background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container);
+  font-size:24px;font-weight:600;flex:none;
+}
+.public-profile-head h1{margin:0 0 .2rem}
+/* Оценка на чужом публичном профиле — та же геометрия/цвет, что у
+   .rating-badge (renderRatingBadge), но НЕ кнопка: там кружок означает
+   «ваша оценка, кликните — измените», тут — «оценка владельца профиля», их
+   нельзя путать (см. renderPublicMovieTile в app.js) — поэтому свой класс,
+   не переиспользование .rating-badge на <span>. */
+.public-rating-badge{
+  position:absolute;bottom:.4rem;right:.4rem;z-index:1;
+  width:1.7rem;height:1.7rem;border-radius:50%;
+  display:grid;place-items:center;font-size:.74rem;font-weight:700;line-height:1;
+  background:var(--flame-tip);color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.4);
+}
 
 /* ===================== TITLE ROW / МЕНЮ КОМНАТЫ ===================== */
 .backlink{font-size:.9rem;text-decoration:none;display:inline-block;margin-bottom:.4rem}
