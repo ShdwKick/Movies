@@ -1839,6 +1839,14 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === "/api/health") return json(res, 200, { ok: true });
 
+    // Сервис личный, а не публичный витрина — поисковикам тут делать нечего.
+    // <meta name="robots"> в index.html дублирует запрет для тех краулеров,
+    // что игнорируют robots.txt, но уважают meta-тег на самой странице.
+    if (p === "/robots.txt") {
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      return res.end("User-agent: *\nDisallow: /\n");
+    }
+
     // Для Admin: server-to-server по общему ключу (см. admin-internal.js), не SSO.
     if (p === "/internal/stats" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
@@ -1881,6 +1889,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET") {
+      // Некоторые краулеры/тулы запрашивают /favicon.ico напрямую с корня,
+      // игнорируя <link rel="icon"> в index.html — отдаём тот же файл, что
+      // и из assets/, без отдельного правила в allowlist serveStatic.
+      if (p === "/favicon.ico" && serveStatic(res, "/assets/favicon.ico")) return;
       if (p !== "/" && serveStatic(res, p)) return;
       return serveApp(res);   // остальное — SPA с маршрутизацией по хэшу
     }

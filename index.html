@@ -5,7 +5,21 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>Что смотрим? — BurningHouse</title>
+<meta name="robots" content="noindex, nofollow">
+<!-- Без description поисковики (замечено на Яндексе) сами выдёргивают
+     кусок текста со страницы под сниппет — и подбирают что попало, вплоть
+     до инструкции из скрытой модалки импорта. Явный description — способ
+     это контролировать. -->
+<meta name="description" content="«Что смотрим?» — сервис BurningHouse для выбора фильма компанией: общие комнаты с друзьями, случайный выбор (рулетка), отметки «просмотрено», личные оценки и рекомендации на их основе.">
+<!-- SVG — основная иконка (современные браузеры, вкладка); PNG/ICO — для
+     тех, кто SVG-фавиконы не читает (в т.ч. замечено у Яндекса при индексации
+     — см. описание проблемы в истории правок). Растеризованы из того же
+     силуэта пламени, что и favicon.svg (см. gen_favicon.js в истории задачи
+     «фавикон для Яндекса»), просто как PNG, не через var(--flame-*). -->
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="assets/favicon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="assets/favicon-180.png">
 <link rel="stylesheet" href="assets/brand.css">
 <link rel="stylesheet" href="assets/theme.css">
 <link rel="stylesheet" href="assets/styles.css">
