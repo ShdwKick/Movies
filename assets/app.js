@@ -1210,13 +1210,15 @@ function renderRoomPicker(container, kinopoiskId, rooms, onAdded) {
 /** Строка результата поиска — общая для шапки (глобальный поиск) и главной
     (поиск на главной): та же шапка постер+инфо, что и у карточки локального
     поиска в комнате (renderMovieResultRow), плюс меню действий
-    (renderAddToMenu — «Отметить просмотренным»/«Добавить в комнату» со
-    своим пикером комнаты/«В личный список», то же меню, что и у плитки
-    витрины) — комната заранее не известна, но это уже не проблема:
-    renderAddToMenu сама показывает список комнат на выбор. rooms — уже
-    полученный список комнат пользователя (см. runHomeSearch/runGlobalSearch —
-    оба дёргают /rooms параллельно с /search, чтобы не грузить его на
-    каждую строку результата отдельно).
+    (renderAddToMenu с withWatched:false — только «Добавить в комнату» со
+    своим пикером комнаты и «В личный список», без «Отметить
+    просмотренным»: тут это не самое частое действие, а место у выпадайки и
+    так впритык в узкой панели поиска, особенно в шапке) — комната заранее
+    не известна, но это уже не проблема: renderAddToMenu сама показывает
+    список комнат на выбор. rooms — уже полученный список комнат
+    пользователя (см. runHomeSearch/runGlobalSearch — оба дёргают /rooms
+    параллельно с /search, чтобы не грузить его на каждую строку результата
+    отдельно).
     Клик по самой строке (не по кнопкам) по-прежнему открывает подробности
     — тот же приём, что и у .movie-card-pick (renderMovieResultCard). */
 function renderSearchResultRow(mv, rooms) {
@@ -1224,7 +1226,7 @@ function renderSearchResultRow(mv, rooms) {
   wrap.setAttribute("role", "button");
   wrap.tabIndex = 0;
   const head = renderMovieResultRow(mv);
-  head.append(renderAddToMenu(mv, rooms));
+  head.append(renderAddToMenu(mv, rooms, null, { withWatched: false }));
   wrap.append(head);
 
   const openInfo = () => openMovieInfoModal(mv);
@@ -1491,11 +1493,17 @@ function renderCardMenu(items, opts = {}) {
     объекты items заново, не переоценивая условие watchedItem?.label) —
     без пересборки той же карточке, открытой второй раз без перезагрузки
     списка, метка так и осталась бы старой (сам этот баг всплыл при
-    проверке фикса). */
-function renderAddToMenu(mv, rooms, onChange) {
+    проверке фикса).
+    opts.withWatched (по умолчанию true) — можно выключить пункт «Отметить
+    просмотренным»/«Убрать из просмотренных»: строке результата поиска он
+    не нужен (см. renderSearchResultRow) — там и без него выпадайка еле
+    помещается в узкую панель поиска, а факт просмотра посреди поиска не
+    самое частое действие. */
+function renderAddToMenu(mv, rooms, onChange, opts = {}) {
   const kinopoiskId = mv.kinopoiskId;
+  const withWatched = opts.withWatched !== false;
   let wrap;
-  const rerenderMenu = () => { wrap.replaceWith(renderAddToMenu(mv, rooms, onChange)); };
+  const rerenderMenu = () => { wrap.replaceWith(renderAddToMenu(mv, rooms, onChange, opts)); };
   const watchedItem = mv.watched
     ? {
         label: "Убрать из просмотренных", danger: true,
@@ -1526,8 +1534,8 @@ function renderAddToMenu(mv, rooms, onChange) {
           }, "Отмечено просмотренным");
         },
       };
-  wrap = renderCardMenu([
-    watchedItem,
+  const items = withWatched ? [watchedItem] : [];
+  items.push(
     {
       label: "Добавить в комнату",
       onClick: menu => {
@@ -1549,7 +1557,8 @@ function renderAddToMenu(mv, rooms, onChange) {
         }, "Добавлено в личный список");
       },
     },
-  ]);
+  );
+  wrap = renderCardMenu(items);
   return wrap;
 }
 

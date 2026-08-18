@@ -361,6 +361,19 @@ select{
    поиска не даёт ему на что "ждать" (заголовка рядом нет), с margin-top по
    умолчанию кнопка съезжала бы вниз относительно постера. */
 .movie-card-head .menu-wrap{margin-top:0}
+/* .movie-card сама держит overflow:hidden ради скругления декоративной
+   полосы слева (.movie-card::before) под её собственный border-radius — но
+   в строке результата поиска внутри неё теперь раскрывается .menu
+   (renderAddToMenu), и та же самая рамка обрезала её вместе с полосой,
+   меню оказывалось невидимым. Оба контейнера результатов — homeSearchResults
+   и globalSearchResults — единственные места, где .movie-card держит
+   открывающееся меню, поэтому overflow:visible включаем только тут:
+   в остальных местах .movie-card (очередь комнаты, история, списки) меню у
+   неё нет, resetить нечего. Цена — квадратные уголки этой 3px-полоски
+   вместо скруглённых у верхнего/нижнего левого угла именно этих карточек,
+   почти незаметно на таком тонком элементе. */
+#homeSearchResults .movie-card,
+#globalSearchResults .movie-card{overflow:visible}
 .movie-card .row{margin-top:.8rem}
 .movie-poster{
   width:4.6rem;height:6.9rem;object-fit:cover;border-radius:var(--md-sys-shape-corner-s);flex:none;
