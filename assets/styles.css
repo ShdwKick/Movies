@@ -259,6 +259,11 @@ a{color:var(--md-sys-color-primary)}
 }
 .chip.rating{background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container)}
 .chip.owner{background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container)}
+/* «Сейчас смотрят» на карточке комнаты в списке (см. renderRooms) — тёплый
+   акцент пламени, не просто нейтральный чип: это живое состояние прямо
+   сейчас, а не статичный факт вроде числа участников. */
+.chip.watching{background:color-mix(in srgb, var(--flame-tip) 22%, var(--md-sys-color-surface-container-high));color:var(--flame-base)}
+.chip.watching::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--flame-tip);flex:none}
 
 /* ===================== ФОРМЫ ===================== */
 input[type="text"]{
@@ -719,6 +724,16 @@ ul.plain{list-style:none;margin:.6rem 0;padding:0}
 ul.plain li{display:flex;justify-content:space-between;align-items:center;gap:.6rem;
   padding:.6em 0;border-bottom:1px solid var(--md-sys-color-outline-variant)}
 ul.plain li:last-child{border-bottom:0}
+
+/* ===================== ПЛЕЕР КОМНАТЫ (тест) ===================== */
+/* Первый <video> во всём сервисе — своих готовых конвенций пока нет,
+   держим просто: во всю ширину контента, тот же радиус скругления, что и
+   у остальных крупных блоков (.movie-card/.modal), тёмная подложка на
+   время буферизации/чёрных полос по формату видео. */
+.room-player{
+  display:block;width:100%;max-height:70vh;
+  border-radius:var(--md-sys-shape-corner-l);background:#000;margin-top:.6rem;
+}
 
 /* ===================== КОД ПРИГЛАШЕНИЯ ===================== */
 .code-box{

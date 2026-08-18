@@ -338,11 +338,27 @@
         </button>
         <div class="menu" id="roomMenu" hidden>
           <button class="menu-item" id="renameRoomBtn">Переименовать</button>
+          <!-- Виден только админам BurningHouse (user.admin, см. server.js)
+               — на время теста плеера включают точечно по комнатам, не
+               всем подряд. Подпись меняется на «Выключить плеер» в
+               renderRoom. -->
+          <button class="menu-item hidden" id="togglePlayerBtn">Включить плеер</button>
           <button class="menu-item danger" id="leaveRoomBtn">Выйти</button>
           <button class="menu-item danger hidden" id="deleteRoomBtn">Удалить комнату</button>
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- Видна всем участникам комнаты, где плеер включён (room.playerEnabled)
+       — включает его только тот, у кого есть togglePlayerBtn выше, но
+       кнопка «Смотреть»/«Присоединиться» — общая. Сам плеер живёт на
+       отдельном экране #/room/:id/watch (roomWatchView ниже), не тут: до
+       выбора контента это был бы просто чёрный квадрат на самой активной
+       странице комнаты, и там же со временем появится чат сессии
+       просмотра — см. renderRoom/showRoomWatch в app.js. -->
+  <div class="row" id="roomWatchRow" hidden>
+    <button class="btn filled" id="roomWatchBtn">Смотреть</button>
   </div>
 
   <h2>Приглашение</h2>
@@ -376,6 +392,21 @@
   <h2>История просмотров</h2>
   <p class="muted" id="movieHistoryEmpty">В этой комнате ещё ничего не смотрели.</p>
   <div class="movie-grid" id="movieHistoryList"></div>
+</section>
+
+<!-- ===================== ПРОСМОТР В КОМНАТЕ (плеер) =====================
+     #/room/:id/watch — отдельный экран, не часть страницы комнаты (см.
+     roomWatchRow там): до выбора контента плеер был бы просто чёрным
+     квадратом на самой активной странице комнаты, а тут со временем
+     появится ещё и чат сессии просмотра. Пока источник фиксированный —
+     /api/stream/test (фаза 1 стрим-пайплайна), привязки к конкретному
+     фильму комнаты ещё нет. Экран шлёт heartbeat, пока открыт (см.
+     showRoomWatch в app.js) — так другие видят «Сейчас смотрят» на
+     странице комнаты и в списке комнат. -->
+<section id="roomWatchView" hidden>
+  <a class="backlink" id="roomWatchBackLink" href="#/">← Комната</a>
+  <h1 id="roomWatchTitle">Просмотр</h1>
+  <video id="roomWatchVideo" class="room-player" controls></video>
 </section>
 
 <!-- ===================== МОДАЛКА: УЧАСТНИКИ ===================== -->

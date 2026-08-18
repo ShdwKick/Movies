@@ -13,7 +13,7 @@
  *     issuer:   process.env.AUTH_ISSUER,      // https://auth.burninghouse.ru
  *     audience: process.env.AUTH_CLIENT_ID,   // finance
  *   });
- *   const user = await auth.userFromRequest(req);  // { id, username, name, email, phone, sid } | null
+ *   const user = await auth.userFromRequest(req);  // { id, username, name, email, phone, sid, admin } | null
  */
 
 const crypto = require("crypto");
@@ -134,6 +134,10 @@ module.exports = function createAuthClient(options) {
       sid: payload.sid || null,
       clientId: payload.aud,
       expiresAt: payload.exp * 1000,
+      // true только если пользователь помечен админом в кабинете BurningHouse
+      // (см. Auth/lib/cli.js: make-admin). Claim отсутствует в токене вовсе,
+      // если false — тот же приём, что и у name/email/phone выше.
+      admin: !!payload.admin,
     };
   }
 

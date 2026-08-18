@@ -42,7 +42,12 @@
  *                  именно эту ссылку, без выбора комнаты/фильма — та обвязка
  *                  появится в следующих фазах.
  *   TORRENT_DIR    (по умолчанию DATA_DIR/torrents) — куда WebTorrent
- *                  скачивает файлы.
+ *                  скачивает файлы. Включать/выключать плеер в конкретной
+ *                  комнате (POST/DELETE /rooms/:id/player) на время теста
+ *                  может только админ BurningHouse — тот же признак admin,
+ *                  что и у общего Admin-дэшборда (claim в токене, см.
+ *                  auth-client.js/userFromRequest), отдельной роли под это
+ *                  заводить не нужно.
  */
 "use strict";
 
@@ -261,6 +266,11 @@ db.exec(`
 for (const sql of [
   "ALTER TABLE room_movies ADD COLUMN watched_at INTEGER",
   "ALTER TABLE room_movies ADD COLUMN watched_by TEXT",
+  // Плеер из торрента (см. torrent-engine.js) — на время теста включается
+  // только точечно, по комнатам, а не сразу всем (включает user.admin, см.
+  // POST/DELETE /rooms/:id/player ниже). По умолчанию 0 — до явного
+  // включения админом плеера в комнате нет.
+  "ALTER TABLE rooms ADD COLUMN player_enabled INTEGER NOT NULL DEFAULT 0",
 ]) {
   try { db.exec(sql); } catch { /* уже есть */ }
 }
@@ -309,6 +319,7 @@ const stmt = {
   insertRoom: db.prepare("INSERT INTO rooms (id,title,join_code,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?)"),
   deleteRoom: db.prepare("DELETE FROM rooms WHERE id = ?"),
   setCode:    db.prepare("UPDATE rooms SET join_code = ?, updated_at = ? WHERE id = ?"),
+  setRoomPlayerEnabled: db.prepare("UPDATE rooms SET player_enabled = ?, updated_at = ? WHERE id = ?"),
 
   member:      db.prepare("SELECT * FROM room_members WHERE room_id = ? AND user_id = ?"),
   members:     db.prepare("SELECT user_id, username, name, role, joined_at FROM room_members WHERE room_id = ? ORDER BY joined_at"),
@@ -568,12 +579,48 @@ function access(roomId, user) {
   return { room, member, isOwner: member.role === "owner" };
 }
 
-function roomPayload(room, me, userId) {
+// ───────────────────────── «сейчас смотрят» (presence) ─────────────────────────
+// Кто сейчас на экране просмотра комнаты (#/room/:id/watch) — держим только в
+// памяти процесса, не в SQLite: это эфемерное «онлайн сейчас», а не факт,
+// который должен пережить перезапуск сервера (тот же принцип, что и у
+// будущего состояния синхронного просмотра, см. стрим-пайплайн §8). Экран
+// просмотра шлёт heartbeat раз в HEARTBEAT_INTERVAL_MS, пока открыт (см.
+// app.js) — не сообщает явно об уходе (закрыл вкладку, потерял сеть), поэтому
+// «смотрит» — просто «был на связи не дольше WATCH_PRESENCE_TTL_MS назад», без
+// отдельного «ушёл» события.
+const WATCH_PRESENCE_TTL_MS = 25000;
+const roomWatchers = new Map(); // roomId -> Map<userId, lastSeenMs>
+
+function touchRoomWatcher(roomId, userId) {
+  if (!roomWatchers.has(roomId)) roomWatchers.set(roomId, new Map());
+  roomWatchers.get(roomId).set(userId, Date.now());
+}
+function isRoomWatched(roomId) {
+  const seen = roomWatchers.get(roomId);
+  if (!seen) return false;
+  const cutoff = Date.now() - WATCH_PRESENCE_TTL_MS;
+  for (const ts of seen.values()) if (ts >= cutoff) return true;
+  return false;
+}
+
+// isAdmin — user.admin из токена (см. auth-client.js/userFromRequest), для
+// canManagePlayer; необязателен — там, где его не передают, просто считаем
+// не-админом, а не падаем.
+function roomPayload(room, me, userId, isAdmin) {
   return {
     room: {
       id: room.id, title: room.title, joinCode: room.join_code,
       createdBy: room.created_by, createdAt: room.created_at, updatedAt: room.updated_at,
       myRole: me.role,
+      // Плеер (см. torrent-engine.js) — playerEnabled видят и решают
+      // показывать плеер ВСЕ участники комнаты, canManagePlayer (можно ли
+      // включить/выключить) — только у админов BurningHouse. watching —
+      // «кто-то сейчас на экране просмотра» (см. isRoomWatched выше) —
+      // решает, показывать ли на странице комнаты «Присоединиться», а не
+      // просто «Смотреть».
+      playerEnabled: !!room.player_enabled,
+      canManagePlayer: !!isAdmin,
+      watching: isRoomWatched(room.id),
     },
     members: stmt.members.all(room.id).map(m => ({
       userId: m.user_id, username: m.username, name: m.name,
@@ -1978,6 +2025,12 @@ async function api(req, res, seg, user, query) {
         rooms: rows.map(r => ({
           id: r.id, title: r.title, myRole: r.my_role, members: r.members,
           createdAt: r.created_at, updatedAt: r.updated_at,
+          // Для бейджа «Сейчас смотрят» на карточке комнаты в списке — тот
+          // же смысл, что у полей в roomPayload (см. там), просто короче:
+          // список комнат не нуждается в canManagePlayer, кнопка входа в
+          // просмотр решается прямо на странице комнаты.
+          playerEnabled: !!r.player_enabled,
+          watching: isRoomWatched(r.id),
         })),
       });
     }
@@ -1986,7 +2039,7 @@ async function api(req, res, seg, user, query) {
       const id = uid(), ts = now();
       stmt.insertRoom.run(id, str(body.title, 200) || "Новая комната", newJoinCode(), user.id, ts, ts);
       stmt.addMember.run(id, user.id, user.username || null, user.name || null, "owner", ts);
-      return json(res, 200, roomPayload(stmt.room.get(id), { role: "owner" }, user.id));
+      return json(res, 200, roomPayload(stmt.room.get(id), { role: "owner" }, user.id, user.admin));
     }
     return json(res, 405, { error: "method not allowed" });
   }
@@ -2012,14 +2065,14 @@ async function api(req, res, seg, user, query) {
     const tail = seg.slice(3);
 
     if (!tail.length) {
-      if (m === "GET") return json(res, 200, roomPayload(ctx.room, ctx.member, user.id));
+      if (m === "GET") return json(res, 200, roomPayload(ctx.room, ctx.member, user.id, user.admin));
       if (m === "PATCH") {
         const body = await readJson(req);
         const f = {};
         if ("title" in body) f.title = str(body.title, 200) || ctx.room.title;
         f.updated_at = now();
         updateRow("rooms", roomId, f);
-        return json(res, 200, roomPayload(stmt.room.get(roomId), ctx.member, user.id));
+        return json(res, 200, roomPayload(stmt.room.get(roomId), ctx.member, user.id, user.admin));
       }
       if (m === "DELETE") {
         // Удалять может только владелец: для остальных есть «выйти из комнаты».
@@ -2036,6 +2089,28 @@ async function api(req, res, seg, user, query) {
       if (m === "POST")   { const code = newJoinCode(); stmt.setCode.run(code, now(), roomId); return json(res, 200, { joinCode: code }); }
       if (m === "DELETE") { stmt.setCode.run(null, now(), roomId); return json(res, 200, { joinCode: null }); }
       return json(res, 405, { error: "method not allowed" });
+    }
+
+    // плеер комнаты: включить/выключить — на время теста только для админов
+    // BurningHouse (user.admin из токена, см. auth-client.js), не для
+    // владельца комнаты — это разные роли, владелец решает про саму
+    // комнату, а плеер ещё не готов быть решением каждого владельца.
+    if (tail[0] === "player") {
+      if (!user.admin) {
+        return json(res, 403, { error: "forbidden", message: "Плеер пока включают только админы — идёт тест." });
+      }
+      if (m === "POST")   { stmt.setRoomPlayerEnabled.run(1, now(), roomId); return json(res, 200, roomPayload(stmt.room.get(roomId), ctx.member, user.id, user.admin)); }
+      if (m === "DELETE") { stmt.setRoomPlayerEnabled.run(0, now(), roomId); return json(res, 200, roomPayload(stmt.room.get(roomId), ctx.member, user.id, user.admin)); }
+      return json(res, 405, { error: "method not allowed" });
+    }
+
+    // «Я сейчас на экране просмотра» — см. isRoomWatched/roomWatchers выше.
+    // Шлёт #/room/:id/watch раз в HEARTBEAT_INTERVAL_MS, пока открыт (см.
+    // app.js). Не требует playerEnabled/admin — сам факт присутствия
+    // безобиден, даже если плеер потом выключат.
+    if (tail[0] === "watch" && tail[1] === "heartbeat" && m === "POST") {
+      touchRoomWatcher(roomId, user.id);
+      return json(res, 200, { ok: true });
     }
 
     if (tail[0] === "leave" && m === "POST") {

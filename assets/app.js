@@ -234,7 +234,7 @@ function requireAuth() {
 }
 
 function showOnly(id) {
-  for (const v of ["authView", "roomsView", "roomView", "drawView", "joinView", "watchedView", "myListView", "profileView", "publicProfileView"]) $(v).hidden = v !== id;
+  for (const v of ["authView", "roomsView", "roomView", "roomWatchView", "drawView", "joinView", "watchedView", "myListView", "profileView", "publicProfileView"]) $(v).hidden = v !== id;
   // Пламя как фон целой страницы допустимо только на экране «нужен вход»
   // (см. BurningHouse/Design/palette.md) — на всех остальных экранах фон
   // нейтральный (--md-sys-color-surface).
@@ -254,8 +254,13 @@ function isPersonalHash(hash) {
 async function route() {
   const hash = location.hash || "#/";
   if (isPersonalHash(hash) && !requireAuth()) return;
+  // Heartbeat экрана просмотра (см. showRoomWatch) — не имеет смысла
+  // держать активным при уходе на любой другой хэш, включая обратно в ту
+  // же комнату: пересоздаётся заново, если снова попадём на .../watch.
+  stopRoomWatchHeartbeat();
   const join = hash.match(/^#\/join\/([A-Za-z0-9]+)/);
   const draw = hash.match(/^#\/room\/([0-9a-f-]{36})\/draw/i);
+  const watch = hash.match(/^#\/room\/([0-9a-f-]{36})\/watch/i);
   const room = hash.match(/^#\/room\/([0-9a-f-]{36})$/i);
   const movie = hash.match(/^#\/movie\/(\d+)/);
   // Тот же набор символов, что USERNAME_RE в Auth/lib/passwords.js —
@@ -264,6 +269,7 @@ async function route() {
 
   if (join) return showJoin(join[1].toUpperCase());
   if (draw) return showDraw(draw[1]);
+  if (watch) return showRoomWatch(watch[1]);
   if (room) return openRoom(room[1]);
   if (hash === "#/watched") return showWatched();
   if (hash === "#/my-list/draw") return showMyListDraw();
@@ -937,7 +943,8 @@ function renderRooms() {
     const card = el("button", "card");
     card.innerHTML = `
       <div class="title">${esc(r.title)}</div>
-      <div class="sub muted">${r.members} ${plural(r.members, "участник", "участника", "участников")}${r.myRole === "owner" ? " · вы владелец" : ""}</div>`;
+      <div class="sub muted">${r.members} ${plural(r.members, "участник", "участника", "участников")}${r.myRole === "owner" ? " · вы владелец" : ""}</div>
+      ${r.watching ? '<div class="chip watching">Сейчас смотрят</div>' : ""}`;
     card.onclick = () => { location.hash = "#/room/" + r.id; };
     box.append(card);
   }
@@ -1015,6 +1022,18 @@ function renderRoom() {
   $("deleteRoomBtn").classList.toggle("hidden", room.myRole !== "owner");
   $("leaveRoomBtn").disabled = room.myRole === "owner" && members.filter(m => m.role === "owner").length <= 1;
 
+  // Плеер (тест, см. server.js) — canManagePlayer решает, виден ли
+  // переключатель В МЕНЮ (не то же самое, что сам плеер: его playerEnabled
+  // видят все участники комнаты, включает — только админ). Сам плеер живёт
+  // на отдельном экране (см. showRoomWatch) — тут только кнопка входа,
+  // подпись меняется на «Присоединиться к просмотру», если room.watching
+  // (кто-то уже там, см. isRoomWatched на бэке).
+  $("togglePlayerBtn").classList.toggle("hidden", !room.canManagePlayer);
+  $("togglePlayerBtn").textContent = room.playerEnabled ? "Выключить плеер" : "Включить плеер";
+  $("roomWatchRow").hidden = !room.playerEnabled;
+  $("roomWatchBtn").textContent = room.watching ? "Присоединиться к просмотру" : "Смотреть";
+  $("roomWatchBtn").onclick = () => { location.hash = "#/room/" + room.id + "/watch"; };
+
   renderCodeArea(room);
 
   const list = $("memberList");
@@ -1028,6 +1047,39 @@ function renderRoom() {
   }
 
   renderMovies();
+}
+
+// Отдельный экран просмотра (см. renderRoom выше и план в артефакте,
+// §«синхронный просмотр») — сервер узнаёт, что комната смотрит, только по
+// хартбитам с этого экрана (см. touchRoomWatcher/isRoomWatched в
+// server.js), поэтому таймер живёт, пока экран открыт, и гасится при уходе
+// на любой другой хэш (см. route()).
+let roomWatchHeartbeatTimer = null;
+const ROOM_WATCH_HEARTBEAT_MS = 10000;
+
+function stopRoomWatchHeartbeat() {
+  if (roomWatchHeartbeatTimer) { clearInterval(roomWatchHeartbeatTimer); roomWatchHeartbeatTimer = null; }
+}
+
+async function showRoomWatch(roomId) {
+  const data = await act(() => api("/rooms/" + roomId));
+  if (!data) { location.hash = "#/"; return; }
+  // Плеер могли выключить, пока по ссылке ещё переходили — смотреть тут
+  // тогда нечего, обратно в комнату.
+  if (!data.room.playerEnabled) { location.hash = "#/room/" + roomId; return; }
+  state.room = data;
+  showOnly("roomWatchView");
+  document.title = `${data.room.title} — Что смотрим?`;
+  $("roomWatchTitle").textContent = data.room.title;
+  $("roomWatchBackLink").href = "#/room/" + roomId;
+  const video = $("roomWatchVideo");
+  const src = new URL("/api/stream/test", location.href).href;
+  if (video.src !== src) video.src = src;
+
+  const heartbeat = () => api("/rooms/" + roomId + "/watch/heartbeat", { method: "POST" }).catch(() => {});
+  stopRoomWatchHeartbeat();
+  heartbeat();
+  roomWatchHeartbeatTimer = setInterval(heartbeat, ROOM_WATCH_HEARTBEAT_MS);
 }
 
 // ───────────────────────── фильмы ─────────────────────────
@@ -2150,6 +2202,18 @@ $("renameRoomBtn").onclick = () => act(async () => {
   state.room = data;
   renderRoom();
 }, "Сохранено");
+
+$("togglePlayerBtn").onclick = () => act(async () => {
+  closeRoomMenu();
+  const roomId = state.room.room.id;
+  const wasEnabled = state.room.room.playerEnabled;
+  const data = await api(`/rooms/${roomId}/player`, { method: wasEnabled ? "DELETE" : "POST" });
+  state.room = data;
+  renderRoom();
+  // Сообщение зависит от направления — тем же приёмом, что и у
+  // friendAddBtn (act() без okText, snack зовём сами по факту результата).
+  snack(wasEnabled ? "Плеер выключен" : "Плеер включён");
+});
 
 $("leaveRoomBtn").onclick = async () => {
   closeRoomMenu();
