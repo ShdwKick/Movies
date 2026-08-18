@@ -356,6 +356,11 @@ select{
   background:linear-gradient(to top,var(--flame-base),var(--flame-tip));opacity:.7;
 }
 .movie-card-head{display:flex;gap:.9rem}
+/* Меню действий (renderAddToMenu) у строки результата поиска — тот же
+   .menu-wrap, что и в шапке/title-row, но тут без верхнего отступа: строка
+   поиска не даёт ему на что "ждать" (заголовка рядом нет), с margin-top по
+   умолчанию кнопка съезжала бы вниз относительно постера. */
+.movie-card-head .menu-wrap{margin-top:0}
 .movie-card .row{margin-top:.8rem}
 .movie-poster{
   width:4.6rem;height:6.9rem;object-fit:cover;border-radius:var(--md-sys-shape-corner-s);flex:none;

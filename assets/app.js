@@ -658,15 +658,22 @@ async function runHomeSearch() {
   // остаётся личным маршрутом (см. isPublicGetRoute в server.js) — анониму
   // тут не смотреть, а сразу предлагаем войти, не дожидаясь 401 с сервера.
   if (!requireAuth()) return;
-  const data = await act(() => api("/search?q=" + encodeURIComponent(q)));
+  // Список комнат — параллельно с поиском, не последовательно: нужен
+  // renderSearchResultRow (быстрое «Добавить в комнату» без похода в
+  // подробности, см. там), а ждать его отдельным запросом ПОСЛЕ поиска
+  // просто добавило бы задержку перед результатами.
+  const [data, roomsData] = await Promise.all([
+    act(() => api("/search?q=" + encodeURIComponent(q))),
+    act(() => api("/rooms")),
+  ]);
   if (!data) return;
   // Запрос мог устареть, пока летел (строку успели стереть/поменять) —
   // не подсовываем результат уже не тому вводу.
   if ($("homeSearchInput").value.trim() !== q) return;
-  renderHomeSearchResults(data.movies);
+  renderHomeSearchResults(data.movies, roomsData ? roomsData.rooms : []);
 }
 
-function renderHomeSearchResults(movies) {
+function renderHomeSearchResults(movies, rooms) {
   $("showcaseToolbar").hidden = true;
   $("genreShelvesWrap").hidden = true;
   $("cachedMoviesWrap").hidden = true;
@@ -675,7 +682,7 @@ function renderHomeSearchResults(movies) {
   box.hidden = false;
   box.textContent = "";
   if (!movies.length) { box.append(el("p", "muted", "Ничего не нашлось.")); return; }
-  for (const mv of movies) box.append(renderSearchResultRow(mv));
+  for (const mv of movies) box.append(renderSearchResultRow(mv, rooms));
 }
 
 // Иконка «Смотреть» на плитке витрины — тот же плей-треугольник, что и
@@ -1202,21 +1209,28 @@ function renderRoomPicker(container, kinopoiskId, rooms, onAdded) {
 
 /** Строка результата поиска — общая для шапки (глобальный поиск) и главной
     (поиск на главной): та же шапка постер+инфо, что и у карточки локального
-    поиска в комнате (renderMovieResultRow), но без своих кнопок действий —
-    комната заранее не известна, поэтому «Отметить просмотренным»/«Добавить
-    в…» доступны только через модалку «Фильм» (её собственное меню в шапке,
-    см. renderMovieInfoModal), которую открывает клик по всей строке — тот
-    же приём, что и у .movie-card-pick (renderMovieResultCard), только тут
-    строка ведёт к подробностям, а не к добавлению. */
-function renderSearchResultRow(mv) {
+    поиска в комнате (renderMovieResultRow), плюс меню действий
+    (renderAddToMenu — «Отметить просмотренным»/«Добавить в комнату» со
+    своим пикером комнаты/«В личный список», то же меню, что и у плитки
+    витрины) — комната заранее не известна, но это уже не проблема:
+    renderAddToMenu сама показывает список комнат на выбор. rooms — уже
+    полученный список комнат пользователя (см. runHomeSearch/runGlobalSearch —
+    оба дёргают /rooms параллельно с /search, чтобы не грузить его на
+    каждую строку результата отдельно).
+    Клик по самой строке (не по кнопкам) по-прежнему открывает подробности
+    — тот же приём, что и у .movie-card-pick (renderMovieResultCard). */
+function renderSearchResultRow(mv, rooms) {
   const wrap = el("div", "movie-card movie-card-pick");
   wrap.setAttribute("role", "button");
   wrap.tabIndex = 0;
-  wrap.append(renderMovieResultRow(mv));
+  const head = renderMovieResultRow(mv);
+  head.append(renderAddToMenu(mv, rooms));
+  wrap.append(head);
 
   const openInfo = () => openMovieInfoModal(mv);
-  wrap.onclick = openInfo;
+  wrap.onclick = e => { if (!e.target.closest("button")) openInfo(); };
   wrap.addEventListener("keydown", e => {
+    if (e.target.closest("button")) return;
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openInfo(); }
   });
 
@@ -2118,21 +2132,26 @@ async function runGlobalSearch() {
   if (!q) { closeGlobalSearch(); return; }
   // /search остаётся личным маршрутом — см. тот же комментарий у runHomeSearch.
   if (!requireAuth()) return;
-  const data = await act(() => api("/search?q=" + encodeURIComponent(q)));
+  // Параллельно с поиском — см. тот же комментарий у runHomeSearch (нужен
+  // renderSearchResultRow для быстрого «Добавить в комнату»).
+  const [data, roomsData] = await Promise.all([
+    act(() => api("/search?q=" + encodeURIComponent(q))),
+    act(() => api("/rooms")),
+  ]);
   if (!data) return;
   // Запрос мог устареть, пока летел (строку успели стереть/поменять) — не
   // подсовываем результат уже не тому вводу (та же защита, что у
   // runHomeSearch).
   if ($("globalSearchInput").value.trim() !== q) return;
-  renderGlobalSearchResults(data.movies);
+  renderGlobalSearchResults(data.movies, roomsData ? roomsData.rooms : []);
 }
 
-function renderGlobalSearchResults(movies) {
+function renderGlobalSearchResults(movies, rooms) {
   const box = $("globalSearchResults");
   box.textContent = "";
   box.hidden = false;
   if (!movies.length) { box.append(el("p", "muted", "Ничего не нашлось.")); return; }
-  for (const mv of movies) box.append(renderSearchResultRow(mv));
+  for (const mv of movies) box.append(renderSearchResultRow(mv, rooms));
 }
 
 $("renameRoomBtn").onclick = () => act(async () => {
