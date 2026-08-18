@@ -234,7 +234,7 @@ function requireAuth() {
 }
 
 function showOnly(id) {
-  for (const v of ["authView", "roomsView", "roomView", "drawView", "joinView", "watchedView", "myListView", "profileView", "publicProfileView"]) $(v).hidden = v !== id;
+  for (const v of ["authView", "roomsView", "roomView", "drawView", "joinView", "watchedView", "myListView", "profileView", "publicProfileView", "friendsView"]) $(v).hidden = v !== id;
   // Пламя как фон целой страницы допустимо только на экране «нужен вход»
   // (см. BurningHouse/Design/palette.md) — на всех остальных экранах фон
   // нейтральный (--md-sys-color-surface).
@@ -248,7 +248,8 @@ function showOnly(id) {
 // входят — это ровно то, что теперь доступно анониму.
 function isPersonalHash(hash) {
   return /^#\/join\//.test(hash) || /^#\/room\//.test(hash) ||
-    hash === "#/watched" || hash === "#/my-list" || hash === "#/my-list/draw" || hash === "#/profile";
+    hash === "#/watched" || hash === "#/my-list" || hash === "#/my-list/draw" || hash === "#/profile" ||
+    hash === "#/friends";
 }
 
 async function route() {
@@ -269,6 +270,7 @@ async function route() {
   if (hash === "#/my-list/draw") return showMyListDraw();
   if (hash === "#/my-list") return showMyList();
   if (hash === "#/profile") return showProfile();
+  if (hash === "#/friends") return showFriends();
   if (movie) return openSharedMovie(parseInt(movie[1], 10));
   if (pubUser) return showPublicProfile(pubUser[1]);
   return showRooms();
@@ -1830,6 +1832,7 @@ $("accountModalPublicProfile").onclick = () => {
   closeAccountMenu();
   if (state.me && state.me.username) location.hash = "#/user/" + state.me.username;
 };
+$("accountModalFriends").onclick = () => { closeAccountMenu(); location.hash = "#/friends"; };
 $("accountModalManage").onclick = () => { closeAccountMenu(); window.open(auth.accountUrl(), "_blank", "noopener"); };
 $("accountModalLogout").onclick = () => { closeAccountMenu(); auth.logout(); };
 $("accountModalTour").onclick = () => {
@@ -3172,6 +3175,135 @@ function renderPublicMoviesInto(container, items, scoreOf) {
     container.append(tile);
   }
 }
+
+// ───────────────────────── друзья: список и управление ─────────────────────────
+// #/friends — тонкая обёртка над GET/POST/DELETE /api/friends/* в server.js
+// (сам он просто проксирует в Auth тем же Bearer-токеном, см. там
+// authFriendsRequest). Друзья — общий список на все сервисы BurningHouse, не
+// свойство именно Movies, но раз Auth открыл управление другим сервисам —
+// удобнее отправить/принять заявку прямо тут, чем уводить на auth-кабинет.
+// Страница личная (isPersonalHash), доступна только вошедшим — поэтому, в
+// отличие от renderAddToMenu на публичных плитках, кнопки здесь без
+// requireAuth(): без входа сюда просто не попасть, route() уже проверила.
+
+/** Имя — ссылка на публичный профиль (тот же приём, что и везде в сервисе,
+    см. friendsMarksHtml/renderPublicMoviesInto), логин отдельной строкой,
+    только если он отличается от отображаемого имени (в Auth name — либо
+    display_name, либо тот же username, тогда вторая строка не нужна). */
+function friendDisplayHtml(p) {
+  const nameLine = `<a href="#/user/${esc(p.username)}">${esc(p.name)}</a>`;
+  return p.name === p.username ? nameLine : `${nameLine}<br><span class="muted">@${esc(p.username)}</span>`;
+}
+
+function renderFriendRow(container, person, actions) {
+  const li = el("li");
+  const left = el("span", "friend-row-name");
+  left.innerHTML = friendDisplayHtml(person);
+  const right = el("span", "friend-actions");
+  for (const a of actions) {
+    const btn = el("button", "btn outlined sm" + (a.danger ? " danger" : ""), a.label);
+    btn.type = "button";
+    btn.onclick = a.onClick;
+    right.append(btn);
+  }
+  li.append(left, right);
+  container.append(li);
+}
+
+async function showFriends() {
+  showOnly("friendsView");
+  document.title = "Что смотрим? — друзья";
+  const data = await act(() => api("/friends"));
+  if (!data) return;
+
+  $("friendInviteLinkInput").value = data.inviteLink || "";
+
+  const incoming = data.incoming || [];
+  $("friendsIncomingWrap").hidden = incoming.length === 0;
+  const incomingList = $("friendsIncomingList");
+  incomingList.textContent = "";
+  for (const p of incoming) {
+    renderFriendRow(incomingList, p, [
+      {
+        label: "Принять",
+        onClick: () => act(async () => {
+          await api(`/friends/${p.requestId}/accept`, { method: "POST" });
+          await showFriends();
+        }, "Заявка принята"),
+      },
+      {
+        label: "Отклонить", danger: true,
+        onClick: () => act(async () => {
+          await api(`/friends/${p.requestId}`, { method: "DELETE" });
+          await showFriends();
+        }, "Заявка отклонена"),
+      },
+    ]);
+  }
+
+  const outgoing = data.outgoing || [];
+  $("friendsOutgoingWrap").hidden = outgoing.length === 0;
+  const outgoingList = $("friendsOutgoingList");
+  outgoingList.textContent = "";
+  for (const p of outgoing) {
+    renderFriendRow(outgoingList, p, [
+      {
+        label: "Отменить", danger: true,
+        onClick: () => act(async () => {
+          await api(`/friends/${p.requestId}`, { method: "DELETE" });
+          await showFriends();
+        }, "Заявка отменена"),
+      },
+    ]);
+  }
+
+  const friends = data.friends || [];
+  $("friendsListEmpty").hidden = friends.length > 0;
+  const friendsList = $("friendsList");
+  friendsList.textContent = "";
+  for (const p of friends) {
+    renderFriendRow(friendsList, p, [
+      {
+        label: "Удалить", danger: true,
+        onClick: () => {
+          if (!confirm(`Удалить ${p.name} из друзей?`)) return;
+          act(async () => {
+            await api(`/friends/${p.friendshipId}`, { method: "DELETE" });
+            await showFriends();
+          }, "Удалено из друзей");
+        },
+      },
+    ]);
+  }
+}
+
+$("friendAddBtn").onclick = () => {
+  // Проверка ДО act() — тот же приём, что и у requireAuth() в
+  // renderAddToMenu: ранний return изнутри колбэка act() выглядел бы для
+  // неё обычным успехом.
+  const username = $("friendAddInput").value.trim();
+  if (!username) return;
+  act(async () => {
+    // Auth сам решает self/already_friends/already_requested (см. FRIEND_ERR
+    // в Auth/server.js) — а если этот логин уже прислал заявку ВАМ, ваша
+    // отправка сразу превращается в принятие (result.accepted) — сообщение
+    // об этом честно отличается от «заявка отправлена», иначе выглядело бы
+    // так, будто до дружбы ещё ждать ответа, хотя вы уже друзья.
+    const result = await api("/friends/request", { method: "POST", body: { username } });
+    $("friendAddInput").value = "";
+    await showFriends();
+    snack(result.accepted ? "Уже были у вас в заявках — теперь друзья" : "Заявка отправлена");
+  });
+};
+$("friendAddInput").addEventListener("keydown", e => { if (e.key === "Enter") $("friendAddBtn").click(); });
+
+$("friendInviteCopyBtn").onclick = () => act(async () => {
+  await navigator.clipboard.writeText($("friendInviteLinkInput").value);
+}, "Ссылка скопирована");
+$("friendInviteRegenBtn").onclick = () => act(async () => {
+  const data = await api("/friends/invite/regenerate", { method: "POST" });
+  $("friendInviteLinkInput").value = data.inviteLink || "";
+}, "Ссылка обновлена");
 
 // ───────────────────────── пошаговое обучение ─────────────────────────
 // Автозапуск один раз для новых пользователей (localStorage-флаг —

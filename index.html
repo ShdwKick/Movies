@@ -320,6 +320,51 @@
   <div class="movie-grid" id="publicProfileWishlistList"></div>
 </section>
 
+<!-- ===================== ДРУЗЬЯ =====================
+     #/friends — список/управление друзьями через BurningHouse Auth
+     (GET/POST/DELETE /api/friends/*, см. server.js — прокси тем же
+     Bearer-токеном, которым пришёл наш собственный запрос, тот же приём,
+     что уже был у fetchFriends). Личный раздел, требует входа — открывается
+     из модалки «Аккаунт» (см. accountModalFriends в app.js). -->
+<section id="friendsView" hidden>
+  <a class="backlink" href="#/">← На главную</a>
+  <h1>Друзья</h1>
+
+  <h2>Добавить по логину</h2>
+  <div class="search-row">
+    <input type="text" id="friendAddInput" placeholder="Логин пользователя" maxlength="32" autocomplete="off">
+    <button class="icon-btn tonal" id="friendAddBtn" title="Отправить заявку" aria-label="Отправить заявку">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+  </div>
+
+  <h2>Ссылка-приглашение</h2>
+  <p class="muted">Перешедший по ней сразу становится другом — без отдельного подтверждения.</p>
+  <div class="bar">
+    <input type="text" id="friendInviteLinkInput" readonly>
+    <button class="icon-btn" id="friendInviteCopyBtn" title="Скопировать" aria-label="Скопировать">
+      <svg class="icon" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+    </button>
+    <button class="icon-btn" id="friendInviteRegenBtn" title="Обновить ссылку" aria-label="Обновить ссылку">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>
+    </button>
+  </div>
+
+  <div id="friendsIncomingWrap" hidden>
+    <h2>Входящие заявки</h2>
+    <ul class="plain" id="friendsIncomingList"></ul>
+  </div>
+
+  <div id="friendsOutgoingWrap" hidden>
+    <h2>Исходящие заявки</h2>
+    <ul class="plain" id="friendsOutgoingList"></ul>
+  </div>
+
+  <h2>Мои друзья</h2>
+  <p class="muted" id="friendsListEmpty">Друзей пока нет — отправьте заявку по логину или поделитесь ссылкой выше.</p>
+  <ul class="plain" id="friendsList"></ul>
+</section>
+
 <!-- ===================== ОДНА КОМНАТА ===================== -->
 <section id="roomView" hidden>
   <a class="backlink" href="#/">← Все комнаты</a>
@@ -501,6 +546,7 @@
 
     <div class="modal-section-label">Профиль</div>
     <button class="btn tonal full" id="accountModalPublicProfile">Мой публичный профиль</button>
+    <button class="btn tonal full" id="accountModalFriends">Друзья</button>
 
     <div class="modal-section-label">Обучение</div>
     <button class="btn tonal full" id="accountModalTour">Показать обучение заново</button>

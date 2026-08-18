@@ -931,19 +931,56 @@ async function fetchFriends(req) {
     if (!res.ok) return [];
     const data = await res.json();
     const friends = Array.isArray(data.friends) ? data.friends : [];
-    // Заодно пополняем known_users (см. таблицу выше) — так друзья, которые
-    // сами ещё ни разу к нам не заходили, всё равно становятся доступны по
-    // публичной ссылке на профиль, как только их увидел хоть один наш
-    // пользователь через «Друзья».
-    const ts = now();
-    for (const f of friends) {
-      if (f.username) stmt.knownUserUpsert.run(f.userId, f.username, f.name || null, ts);
-    }
+    // Заодно пополняем known_users (см. upsertKnownPeople ниже) — так
+    // друзья, которые сами ещё ни разу к нам не заходили, всё равно
+    // становятся доступны по публичной ссылке на профиль, как только их
+    // увидел хоть один наш пользователь через «Друзья».
+    upsertKnownPeople(friends);
     return friends;
   } catch (e) {
     console.error("Auth /api/friends:", e);
     return [];
   }
+}
+
+/** known_users (см. таблицу выше) — общая часть fetchFriends и полного
+    чтения ниже: любой список людей от Auth (друзья/входящие/исходящие,
+    везде одна и та же форма friendView — userId/username/name) стоит
+    сохранить, а не только принятых друзей — так публичный профиль того,
+    кому вы только отправили заявку, тоже сразу открывается по ссылке. */
+function upsertKnownPeople(people) {
+  const ts = now();
+  for (const p of people) {
+    if (p.username) stmt.knownUserUpsert.run(p.userId, p.username, p.name || null, ts);
+  }
+}
+
+/**
+ * Проксирует mutating-запросы к /api/friends/* в Auth тем же Bearer-токеном,
+ * которым пришёл наш собственный запрос (Auth теперь открывает ВЕСЬ
+ * /api/friends/* другим сервисам по Bearer, не только чтение — см.
+ * Auth/server.js, CORS_PATHS/authenticateManaged). В отличие от fetchFriends
+ * (вспомогательные данные для подборки — молча вернуть пустоту при сбое
+ * нормально) тут прямое действие пользователя: «отправить заявку», «удалить
+ * из друзей» — если оно не прошло, он должен об этом узнать, а не увидеть
+ * тихий успех, поэтому ошибку сети превращаем в понятный 502, а не глотаем.
+ */
+async function authFriendsRequest(req, method, path, body) {
+  const token = auth.bearer(req);
+  if (!token) return { status: 401, data: { error: "unauthorized" } };
+  let res;
+  try {
+    res = await fetch(`${AUTH_BASE}${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (e) {
+    console.error(`Auth ${path}:`, e);
+    return { status: 502, data: { error: "upstream", message: "BurningHouse Auth недоступен, попробуйте позже." } };
+  }
+  const data = await res.json().catch(() => ({}));
+  return { status: res.status, data };
 }
 
 /** Оценки/просмотры друзей — карточка конкретного фильма (см. GET
@@ -1648,6 +1685,54 @@ async function api(req, res, seg, user, query) {
     if (m !== "GET") return json(res, 405, { error: "method not allowed" });
     const friends = await fetchFriends(req);
     return json(res, 200, buildRecommendations(user.id, RECOMMENDATIONS_SHOW, friends));
+  }
+
+  // ── список/управление друзьями — тонкий прокси в Auth (см.
+  // authFriendsRequest выше), сам не хранит ничего, кроме known_users для
+  // публичных профилей. ──────────────────────────────────────────
+  if (seg.length === 2 && seg[1] === "friends") {
+    if (m !== "GET") return json(res, 405, { error: "method not allowed" });
+    const { status, data } = await authFriendsRequest(req, "GET", "/api/friends");
+    if (status === 200) {
+      upsertKnownPeople([
+        ...(Array.isArray(data.friends) ? data.friends : []),
+        ...(Array.isArray(data.incoming) ? data.incoming : []),
+        ...(Array.isArray(data.outgoing) ? data.outgoing : []),
+      ]);
+    }
+    return json(res, status, data);
+  }
+
+  // Заявка в друзья по логину — Auth сам решает self/already_friends/
+  // already_requested (см. FRIEND_ERR в Auth/server.js), просто
+  // прокидываем его ответ как есть.
+  if (seg.length === 3 && seg[1] === "friends" && seg[2] === "request") {
+    if (m !== "POST") return json(res, 405, { error: "method not allowed" });
+    const body = await readJson(req);
+    const { status, data } = await authFriendsRequest(req, "POST", "/api/friends/request", { username: body.username });
+    return json(res, status, data);
+  }
+
+  if (seg.length === 4 && seg[1] === "friends" && seg[2] === "invite" && seg[3] === "regenerate") {
+    if (m !== "POST") return json(res, 405, { error: "method not allowed" });
+    const { status, data } = await authFriendsRequest(req, "POST", "/api/friends/invite/regenerate");
+    return json(res, status, data);
+  }
+
+  // Принять входящую заявку — id тут friendshipId/requestId (физически одна
+  // и та же строка связи в Auth, см. комментарий у DELETE ниже).
+  if (seg.length === 4 && seg[1] === "friends" && seg[3] === "accept") {
+    if (m !== "POST") return json(res, 405, { error: "method not allowed" });
+    const { status, data } = await authFriendsRequest(req, "POST", `/api/friends/${encodeURIComponent(seg[2])}/accept`);
+    return json(res, status, data);
+  }
+
+  // Одна ручка на «отклонить входящую», «отменить исходящую» и «удалить из
+  // друзей» — так же устроено и в Auth (см. removeFriendship там).
+  if (seg.length === 3 && seg[1] === "friends" && seg[2] !== "activity" && seg[2] !== "request") {
+    if (m !== "DELETE") return json(res, 405, { error: "method not allowed" });
+    const { status, data } = await authFriendsRequest(req, "DELETE", `/api/friends/${encodeURIComponent(seg[2])}`);
+    return json(res, status, data);
   }
 
   // ── подборка «Друзья» на главной — см. buildFriendsActivity выше ─
