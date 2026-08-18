@@ -132,7 +132,7 @@ a{color:var(--md-sys-color-primary)}
 .appbar-inner{max-width:1080px;margin:0 auto;height:100%;display:flex;align-items:center;gap:8px;padding:0 clamp(12px,4vw,24px)}
 .appbar .bh-lockup{font-size:15px}
 .appbar .bh-lockup .bh-mark{width:34px;height:34px}
-.appbar .bh-lockup:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:4px;border-radius:6px}
+.appbar .bh-lockup-mark:focus-visible, .appbar .bh-lockup-name:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:4px;border-radius:6px}
 .content{max-width:1080px;margin:0 auto;padding:8px clamp(12px,4vw,24px) 96px}
 
 /* Поиск в шапке — компактное поле по центру (два .spacer в appbar-inner по

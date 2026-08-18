@@ -208,10 +208,20 @@
 }
 
 /* ═══ ЛОКАП: знак, бренд, сервис ═══
-   Бренд — постоянная величина, сервис — переменная; вес это и показывает. */
+   Бренд — постоянная величина, сервис — переменная; вес это и показывает.
+
+   Внутри — два независимых <a>, не один: у знака и у имени бренда разные
+   адреса. Знак — это сервис, на котором стоишь, клик по нему возвращает на
+   его собственную домашнюю. «BurningHouse» — это каталог всех сервисов,
+   клик уводит на burninghouse.ru. Раньше был один <a> на весь локап, и
+   каталог из сервиса было не открыть, не потеряв то, что было на экране. */
 .bh-lockup{
   display:inline-flex; align-items:center; gap:.6rem;
-  text-decoration:none; color:inherit; font-size:1rem; line-height:1;
+  font-size:1rem; line-height:1;
+}
+.bh-lockup-mark, .bh-lockup-name{
+  display:inline-flex; align-items:center; gap:.6rem;
+  text-decoration:none; color:inherit;
 }
 .bh-lockup .bh-mark{ width:1.75em; height:1.75em; }
 .bh-name{ font-weight:650; letter-spacing:-.01em; }

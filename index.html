@@ -39,21 +39,25 @@
 
 <div class="appbar" id="appbar">
   <div class="appbar-inner">
-    <a class="bh-lockup" href="#/">
-      <svg class="bh-mark" viewBox="0 0 24 24" role="img" aria-label="BurningHouse">
-        <defs>
-          <linearGradient id="bh-flame" x1="0" y1="1" x2="0" y2="0">
-            <stop offset="0" stop-color="var(--flame-base, #c2410c)"/>
-            <stop offset="1" stop-color="var(--flame-tip, #ffa62b)"/>
-          </linearGradient>
-        </defs>
-        <path fill="url(#bh-flame)" fill-rule="evenodd"
-              d="M12 1.2C13.6 5 16.4 6.6 18.2 9.4C21.4 14.4 18.6 22.4 12 22.4C5.4 22.4 2.6 14.4 5.8 9.4C7.2 7.2 9.2 6 10.2 3.4C10.9 5.6 11.4 6.6 12 7.4C12.4 5.6 12.3 3.4 12 1.2ZM12 9.8 7.4 13.6V19.2H16.6V13.6Z"/>
-      </svg>
-      <span class="bh-name">BurningHouse</span>
-      <span class="bh-sep" aria-hidden="true"></span>
-      <span class="bh-service">Что смотрим?</span>
-    </a>
+    <div class="bh-lockup">
+      <a class="bh-lockup-mark" href="#/" aria-label="Что смотрим? — на главную сервиса">
+        <svg class="bh-mark" viewBox="0 0 24 24" role="img" aria-hidden="true">
+          <defs>
+            <linearGradient id="bh-flame" x1="0" y1="1" x2="0" y2="0">
+              <stop offset="0" stop-color="var(--flame-base, #c2410c)"/>
+              <stop offset="1" stop-color="var(--flame-tip, #ffa62b)"/>
+            </linearGradient>
+          </defs>
+          <path fill="url(#bh-flame)" fill-rule="evenodd"
+                d="M12 1.2C13.6 5 16.4 6.6 18.2 9.4C21.4 14.4 18.6 22.4 12 22.4C5.4 22.4 2.6 14.4 5.8 9.4C7.2 7.2 9.2 6 10.2 3.4C10.9 5.6 11.4 6.6 12 7.4C12.4 5.6 12.3 3.4 12 1.2ZM12 9.8 7.4 13.6V19.2H16.6V13.6Z"/>
+        </svg>
+      </a>
+      <a class="bh-lockup-name" href="https://burninghouse.ru" aria-label="BurningHouse — каталог сервисов">
+        <span class="bh-name">BurningHouse</span>
+        <span class="bh-sep" aria-hidden="true"></span>
+        <span class="bh-service">Что смотрим?</span>
+      </a>
+    </div>
     <div class="spacer"></div>
     <div class="header-search" id="globalSearchWrap" hidden>
       <svg class="icon sm header-search-icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
