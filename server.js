@@ -470,24 +470,19 @@ const stmt = {
     ON CONFLICT(user_id) DO UPDATE SET
       username = excluded.username, display_name = excluded.display_name, updated_at = excluded.updated_at`),
   knownUserByUsername: db.prepare("SELECT * FROM known_users WHERE username = ?"),
-  // Публичный профиль — «Оценки» (только реально оценённые, не просто
-  // watched — то же разграничение, что «Оценки» на Кинопоиске: это витрина
-  // ЧУЖИХ оценок для постороннего посетителя, а не полная история просмотров).
-  publicRatings: db.prepare(`
-    SELECT mm.score AS mm_score, mm.rated_at AS mm_rated_at, mv.*
-      FROM movie_marks mm JOIN movies mv ON mv.kinopoisk_id = mm.kinopoisk_id
-     WHERE mm.user_id = ? AND mm.score IS NOT NULL
-     ORDER BY mm.rated_at DESC`),
-  // Публичный профиль — «Просмотрено»: все отмеченные watched=1, независимо
-  // от того, оценены они или нет (в отличие от publicRatings выше) — та же
-  // выборка, что у своей watchedList, только без avg/rating_count подзапросов:
-  // на публичном профиле показываем только собственную оценку владельца
-  // профиля (score), а не среднюю по сервису.
+  // Публичный профиль — «Просмотрено»: watched=1 ИЛИ есть оценка (оценить
+  // можно и без отметки «просмотрено» — см. PUT .../rating, ручная отметка
+  // без импорта watched не трогает) — тот же OR, что у buildFriendsActivity/
+  // buildRecommendations: раз оценил, значит смотрел, отдельной витрины
+  // «Оценки» на публичном профиле больше нет, обе категории — один список.
+  // Сортировка — COALESCE(rated_at, watched_at), тот же приём, что у
+  // buildFriendsActivity: свежая из двух отметок, а не жёстко watched_at
+  // (иначе только-оценённые-без-watched съезжали бы в конец по NULL).
   publicWatched: db.prepare(`
     SELECT mm.watched_at AS mm_watched_at, mm.score AS mm_score, mv.*
       FROM movie_marks mm JOIN movies mv ON mv.kinopoisk_id = mm.kinopoisk_id
-     WHERE mm.user_id = ? AND mm.watched = 1
-     ORDER BY mm.watched_at DESC`),
+     WHERE mm.user_id = ? AND (mm.watched = 1 OR mm.score IS NOT NULL)
+     ORDER BY COALESCE(mm.rated_at, mm.watched_at) DESC`),
 
   // Очередь импорта (см. import_queue выше и drainImportQueue ниже).
   importQueueInsert: db.prepare(`
@@ -1766,8 +1761,8 @@ async function api(req, res, seg, user, query) {
 
   // ── публичный профиль пользователя (#/user/:username) ─────────
   // Полностью публичный маршрут (см. isPublicGetRoute) — доступен и анониму:
-  // пользователь явно решил не скрывать оценки/список даже от друзей, так
-  // что скрывать их от чужих тем более незачем. username резолвим через
+  // пользователь явно решил не скрывать просмотренное/список даже от друзей,
+  // так что скрывать их от чужих тем более незачем. username резолвим через
   // known_users (свой справочник — Auth общего каталога пользователей не
   // отдаёт, см. комментарий у таблицы), 404 — если ни разу его тут не
   // видели (не заходил сам и не оказался ничьим другом).
@@ -1775,12 +1770,8 @@ async function api(req, res, seg, user, query) {
     if (m !== "GET") return json(res, 405, { error: "method not allowed" });
     const known = stmt.knownUserByUsername.get(seg[2]);
     if (!known) return json(res, 404, { error: "not found", message: "Пользователь не найден." });
-    const ratings = stmt.publicRatings.all(known.user_id).map(r => ({
-      ...moviePayload(r), score: r.mm_score, ratedAt: r.mm_rated_at,
-    }));
-    // «Просмотрено» — включает и оценённые тоже (score тут может быть не
-    // null): это полная история просмотров владельца профиля, а не только
-    // витрина его оценок, как у ratings выше.
+    // «Просмотрено» — watched=1 или есть оценка (см. publicWatched выше),
+    // оценённые несут score, чисто просмотренные без оценки — null.
     const watched = stmt.publicWatched.all(known.user_id).map(r => ({
       ...moviePayload(r), score: r.mm_score, watchedAt: r.mm_watched_at,
     }));
@@ -1798,7 +1789,7 @@ async function api(req, res, seg, user, query) {
     return json(res, 200, {
       username: known.username,
       name: known.display_name,
-      ratings, wishlist, watched,
+      wishlist, watched,
     });
   }
 

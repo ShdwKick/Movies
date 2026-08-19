@@ -3152,12 +3152,12 @@ async function showPublicProfile(username) {
   $("publicProfileName").textContent = data.name || data.username;
   $("publicProfileUsername").textContent = "@" + data.username;
   $("publicProfileWatchedEmpty").hidden = data.watched.length > 0;
-  $("publicProfileRatingsEmpty").hidden = data.ratings.length > 0;
   $("publicProfileWishlistEmpty").hidden = data.wishlist.length > 0;
-  // watched может включать и оценённые фильмы — тогда бейдж на плитке
-  // показывает оценку владельца профиля, как и в «Оценки» ниже.
+  // watched включает и оценённые (в т.ч. оценённые без отдельной отметки
+  // «просмотрено» — см. publicWatched на бэке), тогда бейдж на плитке
+  // показывает оценку владельца профиля; отдельной секции «Оценки» больше
+  // нет, она слита с «Просмотрено».
   renderPublicMoviesInto($("publicProfileWatchedList"), data.watched, mv => mv.score);
-  renderPublicMoviesInto($("publicProfileRatingsList"), data.ratings, mv => mv.score);
   renderPublicMoviesInto($("publicProfileWishlistList"), data.wishlist, () => null);
 }
 
