@@ -57,7 +57,7 @@ let drawState = null;
 // несуществующую страницу для новой сортировки (см. renderCachedMovies).
 // genre — активный фильтр витрины с полки жанров ниже (см. renderGenreShelves/
 // #cachedGenreChip); null — витрина без фильтра, как раньше.
-let showcaseState = { offset: 0, limit: 24, sort: "recent", total: 0, genre: null };
+let showcaseState = { offset: 0, limit: 48, sort: "recent", total: 0, genre: null };
 // Вид витрины «Из базы»: общий список (по умолчанию) или разбивка по полкам
 // жанров — переключатель #showcaseViewToggle (см. applyShowcaseView).
 // Персональной настройкой/localStorage не делаем — та же логика, что и у
@@ -473,8 +473,17 @@ async function renderCachedMovies(rooms) {
     const pages = Math.max(1, Math.ceil(data.total / limit));
     const page = Math.floor(offset / limit) + 1;
     $("cachedPagerLabel").textContent = `Стр. ${page} из ${pages}`;
-    $("cachedPrevBtn").disabled = offset <= 0;
-    $("cachedNextBtn").disabled = offset + limit >= data.total;
+    const atStart = offset <= 0;
+    const atEnd = offset + limit >= data.total;
+    $("cachedPrevBtn").disabled = atStart;
+    $("cachedNextBtn").disabled = atEnd;
+    // ±10 страниц — тот же признак начала/конца, что у обычных «Назад»/
+    // «Вперёд»: реальный переход всё равно клампится (см. обработчики
+    // ниже), кнопка просто не нужна, если и одну страницу дальше/раньше уже
+    // некуда.
+    $("cachedSkipBackBtn").disabled = atStart;
+    $("cachedSkipFwdBtn").disabled = atEnd;
+    $("cachedJumpInput").max = String(pages);
   }
   updateShowcaseToolbarVisibility();
 }
@@ -619,6 +628,38 @@ $("cachedPrevBtn").onclick = () => {
 };
 $("cachedNextBtn").onclick = () => {
   showcaseState.offset += showcaseState.limit;
+  renderCachedMovies(state.rooms);
+};
+// Верхняя граница для ±10/перехода на страницу — по showcaseState.total с
+// ПРЕДЫДУЩЕГО ответа сервера (текущий ещё не пришёл). На момент, когда эти
+// кнопки вообще видны (см. renderCachedMovies — #cachedPager скрыт, пока всё
+// не помещается на одну страницу), total уже гарантированно заполнен хотя
+// бы одной успешной перерисовкой, так что 0 тут не бывает. Без клампа
+// прыжок за реальный конец увёл бы на страницу с пустым data.movies —
+// renderCachedMovies тогда прячет ВСЮ секцию целиком (тот же код, что и для
+// пустого кэша), и вернуться можно было бы только перезагрузкой.
+function maxShowcaseOffset() {
+  const pages = Math.max(1, Math.ceil(showcaseState.total / showcaseState.limit));
+  return (pages - 1) * showcaseState.limit;
+}
+$("cachedSkipBackBtn").onclick = () => {
+  showcaseState.offset = Math.max(0, showcaseState.offset - showcaseState.limit * 10);
+  renderCachedMovies(state.rooms);
+};
+$("cachedSkipFwdBtn").onclick = () => {
+  showcaseState.offset = Math.min(maxShowcaseOffset(), showcaseState.offset + showcaseState.limit * 10);
+  renderCachedMovies(state.rooms);
+};
+// Переход на конкретную страницу — 1-индексация в поле ввода (привычнее
+// пользователю), внутри showcaseState по-прежнему offset. Страницу за
+// пределами реального диапазона (или мусор) не отвергаем ошибкой — просто
+// клампим к первой/последней.
+$("cachedJumpForm").onsubmit = e => {
+  e.preventDefault();
+  const page = parseInt($("cachedJumpInput").value, 10);
+  $("cachedJumpInput").value = "";
+  if (!Number.isFinite(page) || page < 1) return;
+  showcaseState.offset = Math.min(maxShowcaseOffset(), (page - 1) * showcaseState.limit);
   renderCachedMovies(state.rooms);
 };
 

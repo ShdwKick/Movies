@@ -266,6 +266,17 @@ for (const sql of [
   try { db.exec(sql); } catch { /* уже есть */ }
 }
 
+// Однократный backfill: раньше оценка не обязывала «просмотрено» (можно
+// было оценить фильм, ни разу не отметив его просмотренным) — теперь
+// обязывает (см. applyRatedMark у PUT /movies/:id/rating ниже). У СТАРЫХ
+// записей делаем это одним UPDATE при каждом старте: WHERE ловит только ещё
+// не помеченные, так что после первого раза — no-op, отдельного флага
+// «миграция применена» не нужно. watched_at — от rated_at (когда оценили),
+// это лучший имеющийся сигнал «когда, вероятно, посмотрели»; watched=0
+// гарантирует watched_at IS NULL (см. markSetUnwatched/схему выше), поэтому
+// COALESCE не нужен.
+db.exec(`UPDATE movie_marks SET watched = 1, watched_at = rated_at WHERE score IS NOT NULL AND watched = 0`);
+
 // Лог для Admin (см. admin-internal.js) — своя таблица поверх той же базы.
 const adminLog = createAdminLog(db);
 
@@ -291,6 +302,12 @@ const IMPORT_DAILY_CAP = parseInt(process.env.IMPORT_DAILY_CAP || "150", 10);
 function importQuotaAvailable() {
   return poiskkino.usageToday() < IMPORT_DAILY_CAP;
 }
+
+// Максимум комнат в собственности у одного пользователя (см. POST /rooms
+// ниже) — иначе список «Мои комнаты» у активных пользователей рос бы
+// бесконечно вместе со страницами пейджера. Фиксированное число, не env —
+// это продуктовое решение, а не операционная настройка вроде квоты poiskkino.
+const MAX_OWNED_ROOMS = 10;
 
 const stmt = {
   // Ссылку на базу держим здесь намеренно. После инициализации `db` больше нигде
@@ -322,6 +339,14 @@ const stmt = {
       ON CONFLICT(room_id,user_id) DO UPDATE SET username = excluded.username, name = excluded.name, role = excluded.role`),
   dropMember:  db.prepare("DELETE FROM room_members WHERE room_id = ? AND user_id = ?"),
   countOwners: db.prepare("SELECT COUNT(*) AS n FROM room_members WHERE room_id = ? AND role = 'owner'"),
+  // Сколько комнат этот user_id ВЛАДЕЕТ прямо сейчас — не то же самое, что
+  // rooms.created_by (создатель фиксирован навсегда, а владение — роль в
+  // room_members, её можно передать/разделить, см. PATCH .../members/:id
+  // ниже, где кого-то ещё можно сделать со-владельцем) — считаем именно по
+  // роли. Используется только при СОЗДАНИИ комнаты (см. MAX_OWNED_ROOMS) —
+  // получить со-владение уже существующей чужой комнатой сверх лимита этот
+  // счётчик не блокирует, отдельно не просили.
+  countOwnedRoomsForUser: db.prepare("SELECT COUNT(*) AS n FROM room_members WHERE user_id = ? AND role = 'owner'"),
 
   movieByKpId: db.prepare("SELECT * FROM movies WHERE kinopoisk_id = ?"),
   // Для импорта IMDb (см. importImdb) — фильм, уже закэшированный РАНЬШЕ
@@ -1440,8 +1465,9 @@ async function resolveImdbEntry(entry) {
   return { movie };
 }
 
-/** «Просмотрено/оценено» (и с Кинопоиска, и с IMDb) — один и тот же апсерт
-    movie_marks, что и у обычной ручной отметки. */
+/** «Просмотрено/оценено» — общий апсерт movie_marks: используют и импорт (с
+    Кинопоиска, и с IMDb), и обычная ручная оценка (PUT /movies/:id/rating
+    ниже) — там же и объяснение, почему оценка обязывает watched. */
 function applyRatedMark(userId, kinopoiskId, score, ts) {
   stmt.markSetWatched.run(userId, kinopoiskId, ts, ts);
   if (score != null) stmt.markSetRating.run(userId, kinopoiskId, score, ts, ts);
@@ -1999,7 +2025,14 @@ async function api(req, res, seg, user, query) {
         return json(res, 400, { error: "bad score", message: "Оценка — целое число от 1 до 10." });
       }
       const ts = now();
-      stmt.markSetRating.run(user.id, kpId, score, ts, ts);
+      // Оценка подразумевает просмотр — applyRatedMark (тот же апсерт, что и
+      // у импорта из IMDb/Кинопоиска) заодно отмечает watched=1, если ещё не
+      // было. Если уже было просмотрено раньше — watched_at не трогает
+      // (COALESCE внутри markSetWatched), задним числом фиктивную дату
+      // просмотра не подставляет. Обратное (DELETE ниже) watched умышленно
+      // не трогает — «передумал(а) с оценкой» ещё не значит «на самом деле
+      // не смотрел(а)».
+      applyRatedMark(user.id, kpId, score, ts);
       return json(res, 200, { mark: markPayload(stmt.markGet.get(user.id, kpId)) });
     }
     if (m === "DELETE") {
@@ -2143,6 +2176,15 @@ async function api(req, res, seg, user, query) {
       });
     }
     if (m === "POST") {
+      // Лимит на владельца, не на сервис целиком — свои старые комнаты
+      // никого не задевает (у существующих на момент введения лимита
+      // пользователей их и так меньше — проверили отдельно), просто дальше
+      // расти некуда без удаления/передачи чего-то из уже своего.
+      if (stmt.countOwnedRoomsForUser.get(user.id).n >= MAX_OWNED_ROOMS) {
+        return json(res, 409, {
+          error: "room limit", message: `Больше ${MAX_OWNED_ROOMS} комнат в собственности нельзя — удалите или передайте одну из своих, чтобы создать новую.`,
+        });
+      }
       const body = await readJson(req);
       const id = uid(), ts = now();
       stmt.insertRoom.run(id, str(body.title, 200) || "Новая комната", newJoinCode(), user.id, ts, ts);

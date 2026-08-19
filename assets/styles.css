@@ -492,7 +492,15 @@ select{
    .btn.outlined.sm, что и везде. Прячется целиком, если фильмов меньше
    лимита страницы (см. renderCachedMovies в app.js) — сортировка при этом
    остаётся видимой (.showcase-toolbar не трогаем). */
-.pager{display:flex;justify-content:space-between;align-items:center;gap:.8rem;margin-top:1rem}
+.pager{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.8rem;margin-top:1rem}
+/* Витрина «Из базы» (#cachedPager) — единственный пейджер с доп. навигацией
+   (±10 страниц, переход на конкретную) поверх обычных «Назад»/«Вперёд»: у
+   #roomsPager своих детей всего три (кнопка/подпись/кнопка), эти классы там
+   просто не встречаются, задел под рост каталога (в т.ч. через скан
+   библиотеки админом, см. server.js) только у витрины. */
+.pager-nav{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
+.pager-jump{display:flex;align-items:center;gap:.4rem}
+.pager-jump-input{width:4.4rem;flex:none}
 
 /* Компактная плитка витрины — постер (с меню «Добавить в…» бейджем поверх
    обложки) и строка название/год + «Смотреть» (см. renderMovieTile в app.js).

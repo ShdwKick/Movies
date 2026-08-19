@@ -209,9 +209,21 @@
   <div id="cachedMoviesWrap" hidden>
     <div class="movie-grid" id="cachedMoviesList"></div>
     <div class="pager" id="cachedPager">
-      <button class="btn outlined sm" id="cachedPrevBtn">← Назад</button>
-      <span class="muted" id="cachedPagerLabel"></span>
-      <button class="btn outlined sm" id="cachedNextBtn">Вперёд →</button>
+      <div class="pager-nav">
+        <button class="btn outlined sm" id="cachedSkipBackBtn" title="Назад на 10 страниц" aria-label="Назад на 10 страниц">«</button>
+        <button class="btn outlined sm" id="cachedPrevBtn">← Назад</button>
+        <span class="muted" id="cachedPagerLabel"></span>
+        <button class="btn outlined sm" id="cachedNextBtn">Вперёд →</button>
+        <button class="btn outlined sm" id="cachedSkipFwdBtn" title="Вперёд на 10 страниц" aria-label="Вперёд на 10 страниц">»</button>
+      </div>
+      <!-- novalidate — min/max на инпуте ниже только красят стрелочки
+           спиннера, а не блокируют отправку: страницу за пределами диапазона
+           не отвергаем нативной валидацией (пользователь просто ничего не
+           увидит), а клампим сами в обработчике (см. app.js). -->
+      <form class="pager-jump" id="cachedJumpForm" novalidate>
+        <input type="number" min="1" id="cachedJumpInput" class="pager-jump-input" placeholder="№ страницы" aria-label="Перейти на страницу">
+        <button class="btn outlined sm" type="submit">Перейти</button>
+      </form>
     </div>
   </div>
 </section>
