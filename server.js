@@ -232,6 +232,27 @@ db.exec(`
     updated_at   INTEGER NOT NULL
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_known_users_username ON known_users(username);
+
+  -- Админский «расширитель библиотеки» (см. drainLibraryScan/POST
+  -- /internal/library/scan ниже) — сканирует диапазон kinopoisk_id и
+  -- докэшировает то, чего ещё нет в movies. Одна строка (id=1, CHECK) —
+  -- сканов параллельно не бывает, второй запуск просто перезаписывает
+  -- диапазон первого (см. libraryScanStart). next_id — следующий id, с
+  -- которого продолжать (переживает перезапуск сервиса, см. периодический
+  -- тик у drainImportQueue — библиотека докатывается тем же способом).
+  CREATE TABLE IF NOT EXISTS library_scan (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    status      TEXT NOT NULL DEFAULT 'idle',  -- idle | running | paused_quota | done | stopped
+    from_id     INTEGER NOT NULL DEFAULT 0,
+    to_id       INTEGER NOT NULL DEFAULT 0,
+    next_id     INTEGER NOT NULL DEFAULT 0,
+    added       INTEGER NOT NULL DEFAULT 0,
+    cached      INTEGER NOT NULL DEFAULT 0,
+    not_found   INTEGER NOT NULL DEFAULT 0,
+    errors      INTEGER NOT NULL DEFAULT 0,
+    started_at  INTEGER,
+    updated_at  INTEGER
+  );
 `);
 // Колонки, появившиеся позже своих таблиц: базы, созданные раньше, о них не
 // знают, а CREATE TABLE IF NOT EXISTS их не тронет. История «когда и кем этот
@@ -492,6 +513,25 @@ const stmt = {
   importQueueDelete: db.prepare("DELETE FROM import_queue WHERE id = ?"),
   importQueueBumpAttempts: db.prepare("UPDATE import_queue SET attempts = attempts + 1 WHERE id = ?"),
   importQueueCountForUser: db.prepare("SELECT COUNT(*) AS n FROM import_queue WHERE user_id = ?"),
+
+  // Скан библиотеки (см. library_scan выше и drainLibraryScan ниже).
+  libraryScanGet: db.prepare("SELECT * FROM library_scan WHERE id = 1"),
+  // Запуск (INSERT) и перезапуск с новым диапазоном (UPDATE) — один и тот же
+  // вызов: второй POST /internal/library/scan просто перезаписывает диапазон
+  // и счётчики первого (см. комментарий у таблицы).
+  libraryScanStart: db.prepare(`
+    INSERT INTO library_scan (id, status, from_id, to_id, next_id, added, cached, not_found, errors, started_at, updated_at)
+    VALUES (1, 'running', ?, ?, ?, 0, 0, 0, 0, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      status = 'running', from_id = excluded.from_id, to_id = excluded.to_id, next_id = excluded.next_id,
+      added = 0, cached = 0, not_found = 0, errors = 0, started_at = excluded.started_at, updated_at = excluded.updated_at`),
+  // status='running' в WHERE — не перезаписать прогрессом батч, который уже
+  // остановлен через libraryScanStop (см. комментарий в drainLibraryScan про
+  // гонку «остановили посреди батча»).
+  libraryScanProgress: db.prepare(`
+    UPDATE library_scan SET status = ?, next_id = ?, added = ?, cached = ?, not_found = ?, errors = ?, updated_at = ?
+     WHERE id = 1 AND status = 'running'`),
+  libraryScanStop: db.prepare(`UPDATE library_scan SET status = 'stopped', updated_at = ? WHERE id = 1 AND status = 'running'`),
 };
 
 // Обновление полей комнаты собирается динамически, как в Trip/server.js:290-295.
@@ -1565,6 +1605,77 @@ async function drainImportQueue(batchSize = 20) {
   }
 }
 
+// Второй одновременный вызов (двойной клик «Запустить», периодический тик
+// поверх ещё не завершённого немедленного — см. POST-обработчик ниже) читал
+// бы тот же next_id дважды и задвоил бы часть диапазона — простой мьютекс
+// вместо блокировки на уровне БД, drainLibraryScan и так вызывается только
+// из одного процесса.
+let libraryScanBusy = false;
+
+/** Докатывает library_scan (см. таблицу и POST /internal/library/scan) —
+    тот же приём, что у drainImportQueue выше: батчами по мере появления
+    свободной ИМПОРТНОЙ квоты (IMPORT_DAILY_CAP, не общий dailyCap —
+    бесконечный скан диапазона не должен вытеснять живых пользователей),
+    и тем же периодическим тиком (см. setInterval у server.listen) — так
+    скан переживает перезапуск сервиса без действий админа: следующий тик
+    просто продолжит с сохранённого next_id. Уже закэшированные id (есть
+    detail_cached_at) не трогают сеть вовсе — тот же признак, что у
+    ensureMovieCached. */
+async function drainLibraryScan(batchSize = 20) {
+  if (libraryScanBusy) return;
+  libraryScanBusy = true;
+  try {
+    const st = stmt.libraryScanGet.get();
+    if (!st || st.status !== "running") return;
+    if (!poiskkino.enabled || !importQuotaAvailable()) return;
+
+    let id = st.next_id, added = st.added, cached = st.cached, notFound = st.not_found, errors = st.errors;
+    let processed = 0;
+    while (id <= st.to_id && processed < batchSize) {
+      if (!importQuotaAvailable()) break;
+      processed++;
+      const existing = stmt.movieByKpId.get(id);
+      if (existing && existing.detail_cached_at) {
+        cached++;
+      } else {
+        try {
+          upsertMovie(mapMovie(await poiskkino.getById(id)));
+          added++;
+        } catch (e) {
+          if (e && (e.status === 404 || e.status === 400)) notFound++;
+          else { errors++; adminLog.warn("Скан библиотеки: ошибка id", { id, message: e.message }); }
+        }
+      }
+      id++;
+    }
+    const status = id > st.to_id ? "done" : (importQuotaAvailable() ? "running" : "paused_quota");
+    stmt.libraryScanProgress.run(status, id, added, cached, notFound, errors, now());
+  } finally {
+    libraryScanBusy = false;
+  }
+}
+
+/** Ответ на GET/POST /internal/library/scan — читает library_scan заново
+    (не переиспользует то, что могло быть на руках у вызывающего кода), чтобы
+    после fire-and-forget drainLibraryScan() в POST-обработчике админ сразу
+    видел актуальный статус, а не «running» с нулевыми счётчиками. */
+function libraryScanPayload() {
+  const st = stmt.libraryScanGet.get();
+  return {
+    status: st ? st.status : "idle",
+    fromId: st ? st.from_id : null,
+    toId: st ? st.to_id : null,
+    nextId: st ? st.next_id : null,
+    added: st ? st.added : 0,
+    cached: st ? st.cached : 0,
+    notFound: st ? st.not_found : 0,
+    errors: st ? st.errors : 0,
+    startedAt: st ? st.started_at : null,
+    updatedAt: st ? st.updated_at : null,
+    apiUsage: poiskkino.enabled ? `${poiskkino.usageToday()}/${IMPORT_DAILY_CAP}` : "выключен",
+  };
+}
+
 // ───────────────────────── HTTP ─────────────────────────
 function json(res, code, obj) {
   res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -2272,6 +2383,38 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    // Расширение библиотеки диапазоном kinopoisk_id — см. library_scan/
+    // drainLibraryScan выше. GET — статус (поллит фронт Admin, пока идёт),
+    // POST — (пере)запуск с новым диапазоном, POST .../stop — досрочная
+    // остановка. Сам скан работает в фоне (setInterval + fire-and-forget
+    // ниже) — HTTP-обработчики только читают/пишут library_scan, сеть в
+    // запросе не ждут.
+    if (p === "/internal/library/scan" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      return json(res, 200, libraryScanPayload());
+    }
+    if (p === "/internal/library/scan" && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      if (!poiskkino.enabled) return json(res, 503, { error: "not configured", message: "POISKKINO_API_KEY не задан." });
+      const body = await readJson(req);
+      const from = parseInt(body.from, 10), to = parseInt(body.to, 10);
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from < 1 || to < from) {
+        return json(res, 400, { error: "bad range", message: "Нужны целые from/to (kinopoisk_id), from ≤ to." });
+      }
+      const ts = now();
+      stmt.libraryScanStart.run(from, to, from, ts, ts);
+      // Не await — пусть HTTP-ответ уйдёт сразу, первый батч подхватит либо
+      // этот фоновый вызов, либо (если уже что-то идёт, см. libraryScanBusy)
+      // ближайший периодический тик.
+      drainLibraryScan().catch(e => adminLog.error("Скан библиотеки: сбой батча", { message: e.message }));
+      return json(res, 200, libraryScanPayload());
+    }
+    if (p === "/internal/library/scan/stop" && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      stmt.libraryScanStop.run(now());
+      return json(res, 200, libraryScanPayload());
+    }
+
     // Адрес auth отдаём фронту, чтобы он не был зашит в статику.
     if (p === "/api/config") {
       return json(res, 200, { authBase: AUTH_BASE, clientId: AUTH_CLIENT_ID });
@@ -2335,3 +2478,6 @@ server.listen(PORT, HOST, () => {
 // одного прогона (сеть легла и т.п.) не валим процесс — просто попробуем
 // на следующем тике.
 setInterval(() => { drainImportQueue().catch(e => console.error("drainImportQueue:", e)); }, 15 * 60 * 1000);
+// Тот же тик — докатывает library_scan, если админ его запустил (см.
+// drainLibraryScan): переживает перезапуск сервиса без ручного «продолжить».
+setInterval(() => { drainLibraryScan().catch(e => console.error("drainLibraryScan:", e)); }, 15 * 60 * 1000);
