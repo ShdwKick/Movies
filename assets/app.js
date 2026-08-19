@@ -341,23 +341,30 @@ async function refreshShowcase(rooms) {
     authed ? act(() => api("/friends/activity")) : Promise.resolve(null),
   ]);
   const hasGenres = !!(genresData && genresData.genres.length);
-  const hasRecommendations = !!(recoData && recoData.eligible);
-  const hasFriendsActivity = !!(friendsData && friendsData.movies.length);
-  $("showcaseViewToggle").hidden = !hasGenres && !hasRecommendations && !hasFriendsActivity;
+  // Рекомендации — вкладка теперь видна ВСЕГДА (аноним и авторизованный без
+  // достаточно отметок тоже её видят, просто с другим содержимым — см.
+  // renderRecommendations). Раньше пряталась целиком при eligible:false —
+  // посетитель тогда вообще не догадывался, что такая возможность есть.
+  // Друзья — видны любому авторизованному, даже без активности друзей
+  // (renderFriendsActivity тогда предлагает позвать), но не анониму — личная
+  // вкладка, дальше там нечего показывать без входа.
+  const showRecommendations = true;
+  const showFriends = authed;
+  $("showcaseViewToggle").hidden = !hasGenres && !showRecommendations && !showFriends;
   $("showcaseViewGenresBtn").hidden = !hasGenres;
-  $("showcaseViewRecommendationsBtn").hidden = !hasRecommendations;
-  $("showcaseViewFriendsBtn").hidden = !hasFriendsActivity;
+  $("showcaseViewRecommendationsBtn").hidden = !showRecommendations;
+  $("showcaseViewFriendsBtn").hidden = !showFriends;
   // Вид, который сейчас выбран, мог перестать существовать (напр. включили
-  // «По жанрам», потом кэш очистили) — откатываемся на общий список.
+  // «По жанрам», потом кэш очистили, или разлогинились на вкладке «Друзья»)
+  // — откатываемся на общий список.
   if (!hasGenres && showcaseView === "genres") showcaseView = "all";
-  if (!hasRecommendations && showcaseView === "recommendations") showcaseView = "all";
-  if (!hasFriendsActivity && showcaseView === "friends") showcaseView = "all";
+  if (!showFriends && showcaseView === "friends") showcaseView = "all";
   syncShowcaseViewButtons();
   hideAllShowcaseWraps();
   if (showcaseView === "genres") {
     renderGenreShelves(rooms, genresData);
   } else if (showcaseView === "recommendations") {
-    renderRecommendations(rooms, recoData);
+    renderRecommendations(rooms, recoData, authed);
   } else if (showcaseView === "friends") {
     renderFriendsActivity(rooms, friendsData);
   } else {
@@ -555,63 +562,96 @@ function renderGenreShelf(genre, movies, rooms) {
 }
 
 /** Вкладка «Рекомендации» — альтернативный вид витрины (переключатель
-    #showcaseViewToggle, видимость которого решает refreshShowcase; сама эта
-    функция вызывается, только когда showcaseView === "recommendations").
+    #showcaseViewToggle, видна всегда — см. refreshShowcase; сама эта функция
+    вызывается, только когда showcaseView === "recommendations"). Ровно один
+    из четырёх блоков виден за раз (см. index.html):
+      - аноним → #recommendationsLoginGate («войдите»), сеть вообще не трогаем;
+      - авторизован, отметок < RECOMMENDATIONS_MIN_MARKS → #recommendationsNotEnough;
+      - авторизован, отметок хватает, но подобрать нечего (все кандидаты с
+        положительным affinity уже просмотрены/в списке) → #recommendationsEmpty;
+      - иначе — обычная выдача (#recommendationsList).
     data — уже полученный refreshShowcase ответ GET /api/recommendations
-    (первый рендер не дёргает сеть повторно); без него (переключатель
-    «Обновить» ниже, повторный заход на вкладку кнопкой) запрашивает сам —
-    каждый такой запрос сервер перетасовывает заново (см. buildRecommendations
-    в server.js), поэтому «Обновить» почти всегда покажет другой набор, даже
-    если вкусы не изменились. eligible:false — не ошибка, а нормальный ответ
-    «пока рано» (см. RECOMMENDATIONS_MIN_MARKS на бэке); эта вкладка вообще
-    не должна быть видна в таком случае (её скрывает refreshShowcase), но
-    сама функция на всякий случай тоже не падает, а просто ничего не рисует. */
-async function renderRecommendations(rooms, data) {
+    (первый рендер не дёргает сеть повторно); без него (кнопка «Обновить»,
+    повторный заход на вкладку кнопкой) запрашивает сам — каждый такой запрос
+    сервер перетасовывает заново (см. buildRecommendations в server.js),
+    поэтому «Обновить» почти всегда покажет другой набор, даже если вкусы не
+    изменились. authed по умолчанию — текущее состояние входа, но
+    refreshShowcase передаёт его явно (уже знает, вызывать ли /recommendations
+    вообще, см. там). */
+async function renderRecommendations(rooms, data, authed = auth.isAuthenticated()) {
   const wrap = $("recommendationsWrap");
-  const result = data || await act(() => api("/recommendations"));
-  if (!result || !result.eligible) { wrap.hidden = true; updateShowcaseToolbarVisibility(); return; }
   wrap.hidden = false;
 
+  $("recommendationsToolsRow").hidden = !authed;
+  $("recommendationsLoginGate").hidden = authed;
   const box = $("recommendationsList");
   box.textContent = "";
   openCardMenu = null; // старые плитки со своими меню-«…» уходят целиком
-  $("recommendationsEmpty").hidden = result.movies.length > 0;
-  for (const mv of result.movies) {
-    box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv, rooms) }));
+
+  if (!authed) {
+    $("recommendationsNotEnough").hidden = true;
+    $("recommendationsEmpty").hidden = true;
+    updateShowcaseToolbarVisibility();
+    return;
+  }
+
+  const result = data || await act(() => api("/recommendations"));
+  // result === null — сетевая ошибка, act() уже показал тост; не путать с
+  // eligible:false (нормальный «пока рано», см. RECOMMENDATIONS_MIN_MARKS) —
+  // оба случая просто ничего не рисуют, но notEnough честно показываем
+  // только во втором.
+  const eligible = !!(result && result.eligible);
+  $("recommendationsNotEnough").hidden = !result || eligible;
+  $("recommendationsEmpty").hidden = !eligible || result.movies.length > 0;
+  if (eligible) {
+    for (const mv of result.movies) box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv, rooms) }));
   }
   updateShowcaseToolbarVisibility();
 }
 $("recommendationsRefreshBtn").onclick = () => renderRecommendations(state.rooms);
+$("recommendationsLoginBtn").onclick = goLogin;
 
 /** Вкладка «Друзья» — фильмы, которые оценили/посмотрели друзья
     (BurningHouse Auth, GET /api/friends), а сам пользователь ещё нет (см.
     buildFriendsActivity на бэке — то же исключение уже известного, что и у
     рекомендаций). Друзей и их оценки не скрываем — так и попросили, своего
-    тумблера приватности тут нет. data — уже полученный refreshShowcase ответ
-    (первый рендер не дёргает сеть повторно); без него (повторный заход на
-    вкладку кнопкой) запрашивает сам. Это лента активности, не ранжирование
-    по вкусу — сортировка на бэке уже по свежести отметки друга, поэтому
-    своей кнопки «Обновить», в отличие от рекомендаций, тут нет: каждый
-    заход и так актуален. Вкладка вообще не должна быть видна, если у
-    результата нет фильмов (это решает refreshShowcase), но сама функция на
-    всякий случай тоже не падает, а просто ничего не рисует. */
+    тумблера приватности тут нет. Вкладка видна любому авторизованному (см.
+    refreshShowcase) — раньше пряталась целиком, если у друзей ещё нет
+    активности; теперь в этом случае #friendsActivityEmptyState предлагает
+    позвать друзей той же ссылкой-приглашением, что и на #/friends. data —
+    уже полученный refreshShowcase ответ (первый рендер не дёргает сеть
+    повторно); без него (повторный заход на вкладку кнопкой) запрашивает
+    сам. Это лента активности, не ранжирование по вкусу — сортировка на
+    бэке уже по свежести отметки друга, поэтому своей кнопки «Обновить», в
+    отличие от рекомендаций, тут нет: каждый заход и так актуален. */
 async function renderFriendsActivity(rooms, data) {
   const wrap = $("friendsActivityWrap");
-  const result = data || await act(() => api("/friends/activity"));
-  if (!result || !result.movies.length) { wrap.hidden = true; updateShowcaseToolbarVisibility(); return; }
   wrap.hidden = false;
+  const result = data || await act(() => api("/friends/activity"));
 
   const box = $("friendsActivityList");
   box.textContent = "";
   openCardMenu = null;
-  for (const mv of result.movies) {
-    box.append(renderMovieTile(mv, {
-      menu: renderAddToMenu(mv, rooms),
-      extraLine: friendsActivitySummary(mv.friendMarks),
-    }));
+  const hasActivity = !!(result && result.movies.length);
+  $("friendsActivityEmptyState").hidden = hasActivity;
+  if (hasActivity) {
+    for (const mv of result.movies) {
+      box.append(renderMovieTile(mv, {
+        menu: renderAddToMenu(mv, rooms),
+        extraLine: friendsActivitySummary(mv.friendMarks),
+      }));
+    }
   }
   updateShowcaseToolbarVisibility();
 }
+// Ссылка-приглашение — та же, что на #/friends (GET /api/friends), тут без
+// видимого поля: единственное действие — скопировать. inviteLink нарочно не
+// кэшируем на фронте — регенерировать его можно только с полной страницы
+// «Друзья», так что свежее значение и так лежит на сервере постоянно.
+$("friendsActivityCopyBtn").onclick = () => act(async () => {
+  const data = await api("/friends");
+  await navigator.clipboard.writeText(data.inviteLink || "");
+}, "Ссылка скопирована");
 
 function friendsActivitySummary(friendMarks) {
   return friendMarks.map(f => f.score != null ? `${f.name} — ${f.score}` : `${f.name} — смотрел(а)`).join(", ");

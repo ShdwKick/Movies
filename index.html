@@ -179,16 +179,27 @@
 
   <!-- Рекомендации (GET /api/recommendations, см. renderRecommendations в
        app.js) — жанровый affinity-профиль по оценкам/просмотрам пользователя,
-       считается на бэке (buildRecommendations в server.js). Вкладка вообще не
-       появляется в переключателе, пока сервер не сочтёт пользователя eligible
-       (мало отметок — см. RECOMMENDATIONS_MIN_MARKS); #recommendationsEmpty —
-       на случай, когда отметок достаточно, но подобрать реально нечего (все
-       кандидаты с положительным affinity уже просмотрены/в списке). -->
+       считается на бэке (buildRecommendations в server.js). Вкладка видна
+       ВСЕГДА (и анониму, и авторизованному без достаточно отметок) — раньше
+       пряталась целиком, но так посетитель вообще не понимал, что такая
+       возможность есть. Ровно один из четырёх блоков виден за раз:
+       #recommendationsLoginGate (аноним) / #recommendationsNotEnough
+       (авторизован, но отметок меньше RECOMMENDATIONS_MIN_MARKS) /
+       #recommendationsEmpty (отметок достаточно, но подобрать нечего — все
+       кандидаты с положительным affinity уже просмотрены/в списке) /
+       #recommendationsList (обычная выдача). -->
   <div id="recommendationsWrap" hidden>
-    <div class="title-row">
+    <div class="title-row" id="recommendationsToolsRow">
       <p class="muted">Подобрано по вашим оценкам и просмотрам.</p>
       <button class="btn tonal sm" id="recommendationsRefreshBtn" type="button">Обновить</button>
     </div>
+    <div id="recommendationsLoginGate" hidden>
+      <p class="muted">Рекомендации подбираются по вашим оценкам и просмотрам — войдите, чтобы их увидеть.</p>
+      <div class="row">
+        <button class="btn filled sm" id="recommendationsLoginBtn" type="button">Войти</button>
+      </div>
+    </div>
+    <p class="muted" id="recommendationsNotEnough" hidden>Пока маловато оценок для рекомендаций — оцените ещё несколько фильмов, и здесь появится подборка под ваш вкус.</p>
     <p class="muted" id="recommendationsEmpty" hidden>Пока нечего порекомендовать — оцените ещё несколько фильмов или загляните позже, когда кэш пополнится.</p>
     <div class="movie-grid" id="recommendationsList"></div>
   </div>
@@ -196,10 +207,21 @@
   <!-- Друзья (GET /api/friends/activity, см. renderFriendsActivity в app.js)
        — фильмы, которые оценили/посмотрели друзья из BurningHouse Auth, а
        сам пользователь ещё нет (buildFriendsActivity в server.js). Вкладка
-       появляется в переключателе, только если у друзей вообще есть такая
-       активность — своего пустого состояния тут не нужно (см. refreshShowcase). -->
+       видна всем авторизованным (анониму — нет, друзья тут личное), даже
+       если активности пока нет — #friendsActivityEmptyState тогда предлагает
+       позвать друзей той же ссылкой-приглашением, что и на #/friends
+       (см. friendInviteLinkInput там), просто без самой формы — тут достаточно
+       кнопки «Скопировать». -->
   <div id="friendsActivityWrap" hidden>
     <div class="movie-grid" id="friendsActivityList"></div>
+    <div id="friendsActivityEmptyState" hidden>
+      <p class="muted">Пока нечего показать — здесь появятся фильмы, которые оценили или посмотрели ваши друзья, а вы ещё нет.</p>
+      <p class="muted">Позовите друзей по ссылке — перешедший по ней сразу становится другом, без отдельного подтверждения.</p>
+      <div class="row">
+        <button class="btn outlined sm" id="friendsActivityCopyBtn" type="button">Скопировать ссылку-приглашение</button>
+        <a class="btn outlined sm" href="#/friends">Управлять друзьями</a>
+      </div>
+    </div>
   </div>
 
   <!-- Витрина последних закэшированных фильмов (GET /api/movies) — секция
@@ -284,7 +306,9 @@
 
   <div class="title-row">
     <h2>Что мы смотрели</h2>
-    <a class="btn tonal sm" id="profileWatchedMoreBtn" href="#/watched" hidden>Показать все</a>
+    <div class="title-actions">
+      <a class="btn tonal sm" id="profileWatchedMoreBtn" href="#/watched" hidden>Показать все</a>
+    </div>
   </div>
   <p class="muted" id="profileWatchedEmpty">Пока ничего не отмечено просмотренным.</p>
   <div class="movie-grid" id="profileWatchedList"></div>
