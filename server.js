@@ -478,6 +478,16 @@ const stmt = {
       FROM movie_marks mm JOIN movies mv ON mv.kinopoisk_id = mm.kinopoisk_id
      WHERE mm.user_id = ? AND mm.score IS NOT NULL
      ORDER BY mm.rated_at DESC`),
+  // Публичный профиль — «Просмотрено»: все отмеченные watched=1, независимо
+  // от того, оценены они или нет (в отличие от publicRatings выше) — та же
+  // выборка, что у своей watchedList, только без avg/rating_count подзапросов:
+  // на публичном профиле показываем только собственную оценку владельца
+  // профиля (score), а не среднюю по сервису.
+  publicWatched: db.prepare(`
+    SELECT mm.watched_at AS mm_watched_at, mm.score AS mm_score, mv.*
+      FROM movie_marks mm JOIN movies mv ON mv.kinopoisk_id = mm.kinopoisk_id
+     WHERE mm.user_id = ? AND mm.watched = 1
+     ORDER BY mm.watched_at DESC`),
 
   // Очередь импорта (см. import_queue выше и drainImportQueue ниже).
   importQueueInsert: db.prepare(`
@@ -1768,6 +1778,12 @@ async function api(req, res, seg, user, query) {
     const ratings = stmt.publicRatings.all(known.user_id).map(r => ({
       ...moviePayload(r), score: r.mm_score, ratedAt: r.mm_rated_at,
     }));
+    // «Просмотрено» — включает и оценённые тоже (score тут может быть не
+    // null): это полная история просмотров владельца профиля, а не только
+    // витрина его оценок, как у ratings выше.
+    const watched = stmt.publicWatched.all(known.user_id).map(r => ({
+      ...moviePayload(r), score: r.mm_score, watchedAt: r.mm_watched_at,
+    }));
     // personalList заодно тянет my_score/my_watched (= оценка/просмотр
     // ВЛАДЕЛЬЦА профиля, тот же подзапрос, что и у обычного personalList для
     // себя самого) — на чужом публичном профиле оба поля удаляем:
@@ -1782,7 +1798,7 @@ async function api(req, res, seg, user, query) {
     return json(res, 200, {
       username: known.username,
       name: known.display_name,
-      ratings, wishlist,
+      ratings, wishlist, watched,
     });
   }
 

@@ -3151,8 +3151,12 @@ async function showPublicProfile(username) {
   $("publicProfileAvatar").textContent = (data.name || data.username || "?")[0].toUpperCase();
   $("publicProfileName").textContent = data.name || data.username;
   $("publicProfileUsername").textContent = "@" + data.username;
+  $("publicProfileWatchedEmpty").hidden = data.watched.length > 0;
   $("publicProfileRatingsEmpty").hidden = data.ratings.length > 0;
   $("publicProfileWishlistEmpty").hidden = data.wishlist.length > 0;
+  // watched может включать и оценённые фильмы — тогда бейдж на плитке
+  // показывает оценку владельца профиля, как и в «Оценки» ниже.
+  renderPublicMoviesInto($("publicProfileWatchedList"), data.watched, mv => mv.score);
   renderPublicMoviesInto($("publicProfileRatingsList"), data.ratings, mv => mv.score);
   renderPublicMoviesInto($("publicProfileWishlistList"), data.wishlist, () => null);
 }
