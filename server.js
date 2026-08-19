@@ -1612,16 +1612,25 @@ async function drainImportQueue(batchSize = 20) {
 // из одного процесса.
 let libraryScanBusy = false;
 
+// Раньше тут был жёсткий batchSize=20 (тот же, что у drainImportQueue) — но
+// drainImportQueue рассчитан именно на то, чтобы догонять понемногу каждый
+// тик, а скан админ смотрит ЖИВЬЁМ на странице и ждёт, что он идёт
+// непрерывно, а не «20 штук — и тишина на 15 минут до следующего тика» (баг,
+// с которого начался этот тред: прогресс замирал, и было не отличить завис
+// он или просто ждёт). Верхний предел теперь чисто защитный (см. вызов ниже)
+// — реальный тормоз всё равно IMPORT_DAILY_CAP, сетевые походы им и так
+// ограничены; periodic-тик остаётся только на случай перезапуска сервиса
+// посреди скана или возобновления на следующие сутки, когда квота освежится.
+const LIBRARY_SCAN_MAX_PER_CALL = 5000;
+// Раз в столько миллисекунд — «пульс» в лог Admin, пока скан идёт (см. ниже).
+const LIBRARY_SCAN_HEARTBEAT_MS = 10 * 1000;
+
 /** Докатывает library_scan (см. таблицу и POST /internal/library/scan) —
-    тот же приём, что у drainImportQueue выше: батчами по мере появления
-    свободной ИМПОРТНОЙ квоты (IMPORT_DAILY_CAP, не общий dailyCap —
-    бесконечный скан диапазона не должен вытеснять живых пользователей),
-    и тем же периодическим тиком (см. setInterval у server.listen) — так
-    скан переживает перезапуск сервиса без действий админа: следующий тик
-    просто продолжит с сохранённого next_id. Уже закэшированные id (есть
-    detail_cached_at) не трогают сеть вовсе — тот же признак, что у
-    ensureMovieCached. */
-async function drainLibraryScan(batchSize = 20) {
+    непрерывно, пока не кончится диапазон, квота (IMPORT_DAILY_CAP, не общий
+    dailyCap — скан не должен вытеснять живых пользователей) или админ не
+    остановит сам. Уже закэшированные id (есть detail_cached_at) не трогают
+    сеть вовсе — тот же признак, что у ensureMovieCached. */
+async function drainLibraryScan(maxPerCall = LIBRARY_SCAN_MAX_PER_CALL) {
   if (libraryScanBusy) return;
   libraryScanBusy = true;
   try {
@@ -1631,8 +1640,19 @@ async function drainLibraryScan(batchSize = 20) {
 
     let id = st.next_id, added = st.added, cached = st.cached, notFound = st.not_found, errors = st.errors;
     let processed = 0;
-    while (id <= st.to_id && processed < batchSize) {
+    let lastHeartbeat = now();
+    while (id <= st.to_id && processed < maxPerCall) {
       if (!importQuotaAvailable()) break;
+      // Перечитываем статус на каждой итерации, а не только один раз в
+      // начале — так POST .../stop, случившийся посреди прогона (который
+      // теперь может идти долго — см. комментарий у LIBRARY_SCAN_MAX_PER_CALL),
+      // реально прерывает цикл, а не просто теряется под следующей записью
+      // прогресса (см. WHERE status='running' у libraryScanProgress/
+      // libraryScanStop).
+      if (stmt.libraryScanGet.get().status !== "running") {
+        adminLog.info("Скан библиотеки: остановлен", { nextId: id, toId: st.to_id, added, cached, notFound, errors });
+        return;
+      }
       processed++;
       const existing = stmt.movieByKpId.get(id);
       if (existing && existing.detail_cached_at) {
@@ -1647,9 +1667,31 @@ async function drainLibraryScan(batchSize = 20) {
         }
       }
       id++;
+      // Пишем прогресс после КАЖДОГО id, а не одним махом в конце — админ
+      // поллит статус раз в 5с (см. Admin/assets/app.js wireLibraryScan) и
+      // должен видеть живое движение счётчиков.
+      stmt.libraryScanProgress.run("running", id, added, cached, notFound, errors, now());
+      // И раз в LIBRARY_SCAN_HEARTBEAT_MS — то же самое в /internal/logs:
+      // страница Admin и так двигается на каждый id, а вот в логах до этой
+      // строки было видно только ошибки (adminLog.warn выше) — молчание при
+      // отсутствии ошибок выглядело неотличимо от зависшего процесса. Не на
+      // каждый id, а по таймеру — иначе длинный скан сам вытеснит из лога
+      // (limit=1000, см. createAdminLog) всё остальное.
+      if (now() - lastHeartbeat >= LIBRARY_SCAN_HEARTBEAT_MS) {
+        adminLog.info("Скан библиотеки: идёт", {
+          nextId: id, toId: st.to_id, added, cached, notFound, errors,
+          quota: `${poiskkino.usageToday()}/${IMPORT_DAILY_CAP}`,
+        });
+        lastHeartbeat = now();
+      }
     }
-    const status = id > st.to_id ? "done" : (importQuotaAvailable() ? "running" : "paused_quota");
-    stmt.libraryScanProgress.run(status, id, added, cached, notFound, errors, now());
+    if (id > st.to_id) {
+      stmt.libraryScanProgress.run("done", id, added, cached, notFound, errors, now());
+      adminLog.info("Скан библиотеки: диапазон пройден", { fromId: st.from_id, toId: st.to_id, added, cached, notFound, errors });
+    } else if (!importQuotaAvailable()) {
+      stmt.libraryScanProgress.run("paused_quota", id, added, cached, notFound, errors, now());
+      adminLog.info("Скан библиотеки: квота на сегодня исчерпана, продолжит, как только освободится", { nextId: id, toId: st.to_id, added, cached, notFound, errors });
+    }
   } finally {
     libraryScanBusy = false;
   }
@@ -2403,6 +2445,7 @@ const server = http.createServer(async (req, res) => {
       }
       const ts = now();
       stmt.libraryScanStart.run(from, to, from, ts, ts);
+      adminLog.info("Скан библиотеки: запущен", { fromId: from, toId: to });
       // Не await — пусть HTTP-ответ уйдёт сразу, первый батч подхватит либо
       // этот фоновый вызов, либо (если уже что-то идёт, см. libraryScanBusy)
       // ближайший периодический тик.
