@@ -495,12 +495,37 @@ select{
 .pager{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.8rem;margin-top:1rem}
 /* Витрина «Из базы» (#cachedPager) — единственный пейджер с доп. навигацией
    (±10 страниц, переход на конкретную) поверх обычных «Назад»/«Вперёд»: у
-   #roomsPager своих детей всего три (кнопка/подпись/кнопка), эти классы там
-   просто не встречаются, задел под рост каталога (в т.ч. через скан
-   библиотеки админом, см. server.js) только у витрины. */
-.pager-nav{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
-.pager-jump{display:flex;align-items:center;gap:.4rem}
-.pager-jump-input{width:4.4rem;flex:none}
+   #roomsPager своих детей всего три (кнопка/подпись/кнопка) и своей
+   разметки под них нет — стили ниже завязаны на классы .pager-nav/
+   .pager-jump, которых у #roomsPager просто не встречается, .pager сам он
+   не трогает. #cachedPager переопределяет .pager на колонку: сверху строка
+   навигации на всю ширину, под ней — переход на страницу, а не рядом (см.
+   .pager-jump ниже и комментарий в index.html — впритык с пятью кнопками
+   не хватало места).*/
+#cachedPager{flex-direction:column;align-items:stretch}
+/* Три колонки, не space-between — так подпись страницы садится РОВНО по
+   центру независимо от того, что левая группа (« ← Назад) и правая
+   (Вперёд → ») разной ширины; space-between просто распределял бы зазоры
+   между тремя элементами, а не центрировал средний. */
+.pager-nav{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:.5rem}
+.pager-side{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
+.pager-side-right{justify-self:end;justify-content:flex-end}
+#cachedPagerLabel{justify-self:center;text-align:center}
+.pager-jump{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:.4rem}
+/* input.pager-jump-input, не просто .pager-jump-input — иначе ширину
+   перебивает глобальный input[type="number"]{width:100%} (element+atribute
+   у него специфичность (0,1,1), выше голого класса (0,1,0) — тот же приём,
+   что и у .draw-settings-slider-row input[type="number"] чуть выше). Именно
+   поэтому раньше поле всё равно было на всю ширину строки, даже с
+   width:4.4rem — правило просто не применялось. */
+input.pager-jump-input{width:3.2rem;flex:none}
+/* Без flex:none кнопку «Перейти» сжимало в тесном ряду (было впритык с
+   пятью кнопками навигации, см. index.html) — .btn сам по себе
+   overflow:hidden+border-radius:full, поджатый ниже своего содержимого он
+   превращался в маленький кружок с обрезанным текстом. Раскладка ниже уже
+   не тесная (своя строка), оставляем на случай, если станет тесно на узком
+   экране. */
+.pager-jump button{flex:none}
 
 /* Компактная плитка витрины — постер (с меню «Добавить в…» бейджем поверх
    обложки) и строка название/год + «Смотреть» (см. renderMovieTile в app.js).
