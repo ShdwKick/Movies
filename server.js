@@ -213,6 +213,23 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_import_queue_user ON import_queue(user_id);
 
+  -- Очередь на докачку деталей (persons/premiere через poiskkino.dev) для
+  -- фильмов с уже известным kinopoisk_id — см. ensureMovieShallow/POST
+  -- /api/import/movie. В отличие от import_queue выше (там kinopoisk_id
+  -- ЕЩЁ НЕ известен, нужен поиск по title/year) — тут id уже настоящий,
+  -- фильм уже есть в movies с базовыми полями и уже показывается
+  -- пользователю, просто без деталей. Задача этой очереди — не «найти
+  -- фильм», а «досчитать один и тот же getById», поэтому она НЕ per-user
+  -- (в отличие от import_queue): достаточно одной строки на kinopoisk_id,
+  -- даже если его импортировали десять разных пользователей подряд —
+  -- PRIMARY KEY это и обеспечивает (повторный INSERT — no-op, см.
+  -- movieDetailQueueInsert).
+  CREATE TABLE IF NOT EXISTS movie_detail_queue (
+    kinopoisk_id INTEGER PRIMARY KEY REFERENCES movies(kinopoisk_id),
+    requested_at INTEGER NOT NULL,
+    attempts     INTEGER NOT NULL DEFAULT 0
+  );
+
   -- Локальный справочник «кого мы видели» — username/display_name по
   -- user_id, для публичного профиля (GET /api/users/:username ниже).
   -- Auth НЕ отдаёт другим сервисам общий каталог пользователей (см.
@@ -549,6 +566,19 @@ const stmt = {
   importQueueDelete: db.prepare("DELETE FROM import_queue WHERE id = ?"),
   importQueueBumpAttempts: db.prepare("UPDATE import_queue SET attempts = attempts + 1 WHERE id = ?"),
   importQueueCountForUser: db.prepare("SELECT COUNT(*) AS n FROM import_queue WHERE user_id = ?"),
+
+  // Очередь докачки деталей (см. movie_detail_queue выше и
+  // drainMovieDetailQueue ниже) — kinopoisk_id уже известен, тут только
+  // «когда появится квота — доешать getById».
+  movieDetailQueueInsert: db.prepare(`
+    INSERT INTO movie_detail_queue (kinopoisk_id, requested_at) VALUES (?, ?)
+    ON CONFLICT(kinopoisk_id) DO NOTHING`),
+  movieDetailQueueBatch: db.prepare("SELECT * FROM movie_detail_queue ORDER BY requested_at LIMIT ?"),
+  movieDetailQueueDelete: db.prepare("DELETE FROM movie_detail_queue WHERE kinopoisk_id = ?"),
+  movieDetailQueueBumpAttempts: db.prepare("UPDATE movie_detail_queue SET attempts = attempts + 1 WHERE kinopoisk_id = ?"),
+  // Для админки (см. GET /internal/movies/detail-queue) — общий размер
+  // очереди и самая старая заявка, чтобы было видно, застряла она или нет.
+  movieDetailQueueStats: db.prepare("SELECT COUNT(*) AS n, MIN(requested_at) AS oldest FROM movie_detail_queue"),
 
   // Скан библиотеки (см. library_scan выше и drainLibraryScan ниже).
   libraryScanGet: db.prepare("SELECT * FROM library_scan WHERE id = 1"),
@@ -1424,20 +1454,26 @@ async function importRoomCsv(roomId, userId, text) {
   return { imported, skipped, errors, needsConfirm };
 }
 
-// ───────────────────────── импорт оценок/списков (IMDb, Кинопоиск) ─────────────────────────
+// ───────────────────────── импорт оценок/списков (IMDb, Кинопоиск, расширение) ─────────────────────────
 // Пишут в ГЛОБАЛЬНЫЕ movie_marks/personal_list (как и обычные watched/rating/
 // my-list эндпоинты) — импорт не привязан ни к какой комнате, только к
-// пользователю. См. kinopoisk-scraper.js (сбор данных — букмарклет на
-// стороне kinopoisk.ru) и IMDB_CSV_COLUMNS ниже (парсинг официального
-// CSV-экспорта IMDb).
+// пользователю. Источники: браузерное расширение (сбор данных на стороне
+// самого сайта-источника — Кинопоиска через POST /api/import/kinopoisk ниже,
+// и любого другого сервиса через POST /api/import/movie, см. там же —
+// серверного скрейпера у нас больше нет, Яндекс банит IP сервера, см.
+// обсуждение у /api/import/kinopoisk) и IMDB_CSV_COLUMNS ниже (парсинг
+// официального CSV-экспорта IMDb).
 
-/** Фильм из скрейпа Кинопоиска (kinopoisk_id уже известен) → гарантирует
-    строку в movies БЕЗ похода в poiskkino.dev: title/year/постера со
-    страницы профиля достаточно, чтобы карточка нормально работала везде
-    (жанры/рейтинги КП-IMDb/описание останутся пустыми, пока кто-нибудь не
-    откроет «Обновить» на карточке или фильм не докешируется другим путём).
-    Уже закэшированный (в т.ч. полностью, через poiskkino.dev) — не трогаем. */
-function ensureMovieFromKinopoiskScrape(item) {
+/** Фильм с уже известным kinopoisk_id (от расширения — не важно, с
+    Кинопоиска он пришёл или с другого сервиса, само расширение сверяет id)
+    → гарантирует строку в movies БЕЗ похода в poiskkino.dev: title/year/
+    постера от расширения достаточно, чтобы карточка нормально работала
+    везде (жанры/рейтинги КП-IMDb/описание останутся пустыми, пока квота не
+    позволит докачать детали — см. movie_detail_queue/drainMovieDetailQueue
+    ниже, — или фильм не докешируется другим путём). Уже закэшированный
+    (в т.ч. полностью, через poiskkino.dev) — не трогаем: чужие, более
+    полные данные данными из этого конкретного импорта не затираем. */
+function ensureMovieShallow(item) {
   const existing = stmt.movieByKpId.get(item.kinopoiskId);
   if (existing) return existing;
   const ts = now();
@@ -1522,22 +1558,23 @@ function sanitizeScrapedItem(item) {
   if (!title) return null;
   const year = Number.isInteger(item.year) && item.year > 1800 && item.year < 2200 ? item.year : null;
   const score = Number.isInteger(item.score) && item.score >= 1 && item.score <= 10 ? item.score : null;
-  return { kinopoiskId, title, year, score };
+  const posterUrl = str(item.posterUrl, 500);
+  return { kinopoiskId, title, year, score, posterUrl };
 }
 
 /** Импорт «плоских» записей с Кинопоиска — все kinopoisk_id уже известны из
-    скрейпа, сеть вообще не нужна (см. ensureMovieFromKinopoiskScrape).
-    rated обрабатывается ПЕРЕД watchlist — так applyWatchlistEntry увидит
-    уже проставленные этим же импортом оценки и не продублирует их же
-    фильмы в личный список (план: «убираем из буду смотреть те, для
-    которых уже есть оценка»). */
+    скрейпа, сеть вообще не нужна (см. ensureMovieShallow). rated
+    обрабатывается ПЕРЕД watchlist — так applyWatchlistEntry увидит уже
+    проставленные этим же импортом оценки и не продублирует их же фильмы в
+    личный список (план: «убираем из буду смотреть те, для которых уже есть
+    оценка»). */
 function importKinopoiskCollected(userId, rated, watchlist) {
   const ts = now();
   let ratedImported = 0;
   for (const raw of rated) {
     const item = sanitizeScrapedItem(raw);
     if (!item) continue;
-    const movie = ensureMovieFromKinopoiskScrape(item);
+    const movie = ensureMovieShallow(item);
     applyRatedMark(userId, movie.kinopoisk_id, item.score, ts);
     ratedImported++;
   }
@@ -1545,7 +1582,7 @@ function importKinopoiskCollected(userId, rated, watchlist) {
   for (const raw of watchlist) {
     const item = sanitizeScrapedItem(raw);
     if (!item) continue;
-    const movie = ensureMovieFromKinopoiskScrape(item);
+    const movie = ensureMovieShallow(item);
     const outcome = applyWatchlistEntry(userId, movie.kinopoisk_id, ts);
     if (outcome === "added") watchlistAdded++; else watchlistSkipped++;
   }
@@ -1649,6 +1686,55 @@ async function drainImportQueue(batchSize = 20) {
     else applyWatchlistEntry(row.user_id, movie.kinopoisk_id, ts);
     stmt.importQueueDelete.run(row.id);
   }
+}
+
+/** Догоняет movie_detail_queue — тем же приёмом и тем же тиком, что и
+    drainImportQueue выше, но проще: kinopoisk_id уже настоящий (расширение
+    его само знает, см. POST /api/import/movie), никакого поиска по
+    title/year тут не нужно — просто ensureMovieCached каждого id по
+    очереди, пока хватает импортной квоты.
+
+    Логи — та же дилемма, что решали у library-scan («ощущение, что всё
+    зависло»): очередь тикает раз в 15 минут и до этой правки не писала в
+    лог вообще ничего в успешном случае — админ, глядящий на счётчик в
+    Admin, не мог отличить «ждёт своего тика» от «сломалось». Не флудим на
+    каждый пустой тик (обычное дело, когда очередь пуста), но раз в тик
+    ПОДТВЕРЖДАЕМ, что механизм жив — либо докатили партию, либо честно ждём
+    квоту (и только если реально есть что докатывать — на пустой очереди
+    без квоты писать нечего и незачем). */
+async function drainMovieDetailQueue(batchSize = 20) {
+  if (!poiskkino.enabled) return;
+  if (!importQuotaAvailable()) {
+    const pending = stmt.movieDetailQueueStats.get().n;
+    if (pending > 0) adminLog.info("Очередь деталей: ждёт квоту", { pending, quota: `${poiskkino.usageToday()}/${IMPORT_DAILY_CAP}` });
+    return;
+  }
+  const batch = stmt.movieDetailQueueBatch.all(batchSize);
+  if (!batch.length) return;
+  let added = 0, errors = 0;
+  for (const row of batch) {
+    if (!importQuotaAvailable()) break;
+    try {
+      await ensureMovieCached(row.kinopoisk_id);
+      stmt.movieDetailQueueDelete.run(row.kinopoisk_id);
+      added++;
+    } catch (e) {
+      errors++;
+      stmt.movieDetailQueueBumpAttempts.run(row.kinopoisk_id);
+      // Тот же порог, что у import_queue — реальный id, поэтому 404 тут
+      // маловероятен (разве что фильм с тех пор удалили из библиотеки, см.
+      // DELETE /internal/movies/:id), но сеть подводит и без этого; сдаёмся
+      // после пяти попыток, а не висим в очереди вечно. Фильм остаётся с
+      // базовыми полями — не удаляем и не откатываем, просто прекращаем
+      // пытаться доукомплектовать.
+      if (row.attempts + 1 >= 5) {
+        stmt.movieDetailQueueDelete.run(row.kinopoisk_id);
+        adminLog.warn("Очередь деталей: сдался после 5 попыток", { kinopoiskId: row.kinopoisk_id, message: e.message });
+      }
+    }
+  }
+  const remaining = stmt.movieDetailQueueStats.get().n;
+  adminLog.info("Очередь деталей: докатил партию", { added, errors, remaining });
 }
 
 // Второй одновременный вызов (двойной клик «Запустить», периодический тик
@@ -2169,6 +2255,63 @@ async function api(req, res, seg, user, query) {
     return json(res, 200, result);
   }
 
+  // ── импорт ОДНОГО фильма от расширения импорта с разных сервисов
+  // (не только Кинопоиска — IMDb и т.п., см. обсуждение) — POST
+  // /api/import/movie. Расширение дёргает эту ручку по кругу, по одному
+  // фильму за вызов, само зная настоящий kinopoisk_id (сверяет его само —
+  // на сервере мы это не проверяем и не можем: серверный скрейп Кинопоиска
+  // тут не живёт, см. комментарий у /api/import/kinopoisk выше). Границу
+  // доверия к телу запроса — та же, что у sanitizeScrapedItem (см. там):
+  // Bearer уже свой, портит в худшем случае только данные приславшего.
+  //
+  // Фильм в movies появляется НЕМЕДЛЕННО — той же ensureMovieShallow, что
+  // и у /api/import/kinopoisk — и той же секунды получает mark
+  // (watched/rating или personal_list), НЕЗАВИСИМО от квоты poiskkino.dev:
+  // это то, ради чего вся ручка задумана — фильм на странице пользователя
+  // сразу, а не после того, как когда-нибудь освободится квота. Квота нужна
+  // только на ДОСБОР деталей (жанры/актёры/постер получше) — если она есть
+  // прямо сейчас, добираем синхронно в этом же запросе; если нет — фильм
+  // остаётся с базовыми полями и попадает в movie_detail_queue, детали
+  // дособерутся сами (см. drainMovieDetailQueue) без участия пользователя.
+  if (seg.length === 3 && seg[1] === "import" && seg[2] === "movie") {
+    if (m !== "POST") return json(res, 405, { error: "method not allowed" });
+    const body = await readJson(req);
+    const kpId = parseInt(body.kinopoiskId, 10);
+    if (!Number.isInteger(kpId) || kpId <= 0) return json(res, 400, { error: "bad kinopoiskId" });
+    const title = str(body.title, 300);
+    if (!title) return json(res, 400, { error: "bad title", message: "Название обязательно." });
+    const category = oneOf(body.category, ["watched", "watchlist"]);
+    if (!category) return json(res, 400, { error: "bad category", message: "category — watched или watchlist." });
+    const yearRaw = parseInt(body.year, 10);
+    const year = Number.isInteger(yearRaw) && yearRaw > 1800 && yearRaw < 2200 ? yearRaw : null;
+    const scoreRaw = category === "watched" ? parseInt(body.score, 10) : NaN;
+    const score = Number.isInteger(scoreRaw) && scoreRaw >= 1 && scoreRaw <= 10 ? scoreRaw : null;
+    const posterUrl = str(body.posterUrl, 500);
+
+    const ts = now();
+    // Уже был в кэше (в т.ч. полностью, через poiskkino.dev) — ensureMovieShallow
+    // сама не трогает существующую строку, тут просто читаем актуальное
+    // detail_cached_at, чтобы решить, нужен ли досбор вообще.
+    let movie = stmt.movieByKpId.get(kpId) || ensureMovieShallow({ kinopoiskId: kpId, title, year, posterUrl });
+    let cached = !!movie.detail_cached_at;
+    let queued = false;
+    if (!cached) {
+      if (poiskkino.enabled && importQuotaAvailable()) {
+        try {
+          movie = await ensureMovieCached(kpId);
+          cached = !!movie.detail_cached_at;
+        } catch { /* сеть/квота подвели именно сейчас — не валим импорт, обычная очередь ниже подхватит */ }
+      }
+      if (!cached) { stmt.movieDetailQueueInsert.run(kpId, ts); queued = true; }
+    }
+
+    const markOutcome = category === "watched"
+      ? (applyRatedMark(user.id, kpId, score, ts), "applied")
+      : applyWatchlistEntry(user.id, kpId, ts);
+
+    return json(res, 200, { movie: moviePayload(stmt.movieByKpId.get(kpId)), cached, queued, markOutcome });
+  }
+
   // Официальный CSV-экспорт IMDb — тело CSV сырым текстом, как и у
   // POST /rooms/:id/import (см. выше), тот же формат передачи с фронта.
   if (seg.length === 4 && seg[1] === "import" && seg[2] === "imdb" && (seg[3] === "ratings" || seg[3] === "watchlist")) {
@@ -2552,6 +2695,20 @@ const server = http.createServer(async (req, res) => {
       return json(res, 405, { error: "method not allowed" });
     }
 
+    // Очередь докачки деталей (см. movie_detail_queue/drainMovieDetailQueue
+    // выше) — только видимость для Admin, управлять тут нечем: она сама
+    // себя дренит по тику, вручную можно только подождать или дать квоте
+    // освободиться.
+    if (p === "/internal/movies/detail-queue" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const row = stmt.movieDetailQueueStats.get();
+      return json(res, 200, {
+        pending: row.n,
+        oldestRequestedAt: row.oldest,
+        apiUsage: poiskkino.enabled ? `${poiskkino.usageToday()}/${IMPORT_DAILY_CAP}` : "выключен",
+      });
+    }
+
     // Адрес auth отдаём фронту, чтобы он не был зашит в статику.
     if (p === "/api/config") {
       return json(res, 200, { authBase: AUTH_BASE, clientId: AUTH_CLIENT_ID });
@@ -2618,3 +2775,6 @@ setInterval(() => { drainImportQueue().catch(e => console.error("drainImportQueu
 // Тот же тик — докатывает library_scan, если админ его запустил (см.
 // drainLibraryScan): переживает перезапуск сервиса без ручного «продолжить».
 setInterval(() => { drainLibraryScan().catch(e => console.error("drainLibraryScan:", e)); }, 15 * 60 * 1000);
+// И докатывает movie_detail_queue — фильмы от расширения, добавленные без
+// квоты, дособираются деталями по мере её появления.
+setInterval(() => { drainMovieDetailQueue().catch(e => console.error("drainMovieDetailQueue:", e)); }, 15 * 60 * 1000);
