@@ -349,6 +349,17 @@ const stmt = {
   countOwnedRoomsForUser: db.prepare("SELECT COUNT(*) AS n FROM room_members WHERE user_id = ? AND role = 'owner'"),
 
   movieByKpId: db.prepare("SELECT * FROM movies WHERE kinopoisk_id = ?"),
+  // Удаление из библиотеки (см. DELETE /internal/movies/:id) — три счётчика
+  // использования, чтобы не рвать FK (room_movies/movie_marks/personal_list
+  // все REFERENCES movies(kinopoisk_id), PRAGMA foreign_keys=ON — просто
+  // DELETE FROM movies при живых ссылках упал бы constraint-ошибкой) и,
+  // главное, не выкинуть тихо чужие данные (чью-то оценку, комнатную
+  // очередь) вместе с самим фильмом. deleteMovie сработает, только если все
+  // три — 0.
+  roomMoviesCountForMovie: db.prepare("SELECT COUNT(*) AS n FROM room_movies WHERE kinopoisk_id = ?"),
+  movieMarksCountForMovie: db.prepare("SELECT COUNT(*) AS n FROM movie_marks WHERE kinopoisk_id = ?"),
+  personalListCountForMovie: db.prepare("SELECT COUNT(*) AS n FROM personal_list WHERE kinopoisk_id = ?"),
+  deleteMovie: db.prepare("DELETE FROM movies WHERE kinopoisk_id = ?"),
   // Для импорта IMDb (см. importImdb) — фильм, уже закэшированный РАНЬШЕ
   // через poiskkino.dev (там imdb_id есть всегда), находится без сети и без
   // расхода импортной квоты. Фильмы, попавшие в кэш из скрейпа Кинопоиска
@@ -706,6 +717,15 @@ function upsertMovie(mapped) {
     mapped.director, JSON.stringify(mapped.actors), ts, ts
   );
   return stmt.movieByKpId.get(mapped.kinopoiskId);
+}
+
+/** Сколько где реально используется фильм — см. DELETE /internal/movies/:id. */
+function movieUsage(kpId) {
+  return {
+    rooms: stmt.roomMoviesCountForMovie.get(kpId).n,
+    marks: stmt.movieMarksCountForMovie.get(kpId).n,
+    personalList: stmt.personalListCountForMovie.get(kpId).n,
+  };
 }
 
 /**
@@ -2498,6 +2518,38 @@ const server = http.createServer(async (req, res) => {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
       stmt.libraryScanStop.run(now());
       return json(res, 200, libraryScanPayload());
+    }
+
+    // Удаление фильма из библиотеки — только через Admin (checkAdminKey, не
+    // обычная авторизация: у Admin нет пользовательского JWT этого сервиса,
+    // только общий серверный секрет, см. admin-internal.js). GET — карточка
+    // + счётчики использования (movieUsage), чтобы админ видел, что удаляет
+    // и не наткнётся на отказ вслепую; DELETE — сам отказывает (409), если
+    // фильм где-то используется (см. movieUsage/deleteMovie выше) — тихо
+    // выкидывать чужую оценку/комнатную очередь вместе с фильмом не должны.
+    const movieMatch = p.match(/^\/internal\/movies\/(\d+)$/);
+    if (movieMatch) {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const kpId = parseInt(movieMatch[1], 10);
+      const movie = stmt.movieByKpId.get(kpId);
+      if (!movie) return json(res, 404, { error: "not found", message: "Фильм с таким kinopoisk_id не найден в кэше." });
+      if (req.method === "GET") {
+        return json(res, 200, { ...moviePayload(movie), usage: movieUsage(kpId) });
+      }
+      if (req.method === "DELETE") {
+        const usage = movieUsage(kpId);
+        if (usage.rooms > 0 || usage.marks > 0 || usage.personalList > 0) {
+          return json(res, 409, {
+            error: "in use",
+            message: `«${movie.title}» используется: в очередях/истории комнат — ${usage.rooms}, оценок/отметок «просмотрено» — ${usage.marks}, в личных списках — ${usage.personalList}. Уберите фильм оттуда вручную, прежде чем удалять из библиотеки.`,
+            usage,
+          });
+        }
+        stmt.deleteMovie.run(kpId);
+        adminLog.info("Фильм удалён из библиотеки", { kinopoiskId: kpId, title: movie.title });
+        return json(res, 200, { ok: true });
+      }
+      return json(res, 405, { error: "method not allowed" });
     }
 
     // Адрес auth отдаём фронту, чтобы он не был зашит в статику.
