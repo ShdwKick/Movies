@@ -234,7 +234,7 @@ function requireAuth() {
 }
 
 function showOnly(id) {
-  for (const v of ["authView", "roomsView", "roomView", "drawView", "joinView", "watchedView", "myListView", "profileView", "publicProfileView", "friendsView"]) $(v).hidden = v !== id;
+  for (const v of ["authView", "roomsView", "roomView", "drawView", "joinView", "watchedView", "myListView", "profileView", "publicProfileView", "friendsView", "collectionView"]) $(v).hidden = v !== id;
   // Пламя как фон целой страницы допустимо только на экране «нужен вход»
   // (см. BurningHouse/Design/palette.md) — на всех остальных экранах фон
   // нейтральный (--md-sys-color-surface).
@@ -245,9 +245,12 @@ function showOnly(id) {
 // ЭТОГО пользователя): комната, история/личный список и их розыгрыш,
 // профиль, приглашение (вступление — уже мутация). Общая витрина (#/) и
 // карточка фильма по расшариваемой ссылке (#/movie/:id) сюда намеренно НЕ
-// входят — это ровно то, что теперь доступно анониму.
+// входят — это ровно то, что теперь доступно анониму. #/collection/:slug —
+// не личные данные (подборки Кинопоиска одни для всех), но живой запрос к
+// poiskkino.dev тратит общую суточную квоту, поэтому по той же причине, что
+// и /search в шапке, доступ только вошедшим (см. isPublicGetRoute в server.js).
 function isPersonalHash(hash) {
-  return /^#\/join\//.test(hash) || /^#\/room\//.test(hash) ||
+  return /^#\/join\//.test(hash) || /^#\/room\//.test(hash) || /^#\/collection\//.test(hash) ||
     hash === "#/watched" || hash === "#/my-list" || hash === "#/my-list/draw" || hash === "#/profile" ||
     hash === "#/friends";
 }
@@ -262,6 +265,9 @@ async function route() {
   // Тот же набор символов, что USERNAME_RE в Auth/lib/passwords.js —
   // логин там латиница/цифры/._- длиной 3–32.
   const pubUser = hash.match(/^#\/user\/([A-Za-z0-9_.-]+)/);
+  // Slug коллекции у poiskkino.dev — латиница/цифры/дефис (пример из их же
+  // документации: "top250"), тот же паттерн, что и в server.js.
+  const collection = hash.match(/^#\/collection\/([\w-]+)/);
 
   if (join) return showJoin(join[1].toUpperCase());
   if (draw) return showDraw(draw[1]);
@@ -273,6 +279,7 @@ async function route() {
   if (hash === "#/friends") return showFriends();
   if (movie) return openSharedMovie(parseInt(movie[1], 10));
   if (pubUser) return showPublicProfile(pubUser[1]);
+  if (collection) return showCollection(collection[1]);
   return showRooms();
 }
 addEventListener("hashchange", () => { closeGlobalSearch(); route().catch(console.error); });
@@ -347,18 +354,30 @@ async function refreshShowcase(rooms) {
   // посетитель тогда вообще не догадывался, что такая возможность есть.
   // Друзья — видны любому авторизованному, даже без активности друзей
   // (renderFriendsActivity тогда предлагает позвать), но не анониму — личная
-  // вкладка, дальше там нечего показывать без входа.
+  // вкладка, дальше там нечего показывать без входа. Подборки — живой запрос
+  // к poiskkino.dev (не наш кэш, тратит общую суточную квоту, см.
+  // /api/collections в server.js), поэтому, как и /search в шапке, только
+  // вошедшим — анониму вкладка не показывается вовсе, а не гейтится
+  // изнутри, как рекомендации (там смысл показать анониму есть — «вот что
+  // будет после входа», здесь нет: список подборок один и тот же для всех,
+  // рекламировать нечего). Саму витрину подборок (какие есть) НЕ грузим тут
+  // же вместе с genres/reco/friends — только по клику на вкладку
+  // (renderCollectionsGallery ниже): в отличие от них это живой запрос, и
+  // тратить квоту на каждый заход на главную ради видимости кнопки не стоит.
   const showRecommendations = true;
   const showFriends = authed;
-  $("showcaseViewToggle").hidden = !hasGenres && !showRecommendations && !showFriends;
+  const showCollections = authed;
+  $("showcaseViewToggle").hidden = !hasGenres && !showRecommendations && !showFriends && !showCollections;
   $("showcaseViewGenresBtn").hidden = !hasGenres;
   $("showcaseViewRecommendationsBtn").hidden = !showRecommendations;
   $("showcaseViewFriendsBtn").hidden = !showFriends;
+  $("showcaseViewCollectionsBtn").hidden = !showCollections;
   // Вид, который сейчас выбран, мог перестать существовать (напр. включили
-  // «По жанрам», потом кэш очистили, или разлогинились на вкладке «Друзья»)
-  // — откатываемся на общий список.
+  // «По жанрам», потом кэш очистили, или разлогинились на вкладке «Друзья»/
+  // «Подборки») — откатываемся на общий список.
   if (!hasGenres && showcaseView === "genres") showcaseView = "all";
   if (!showFriends && showcaseView === "friends") showcaseView = "all";
+  if (!showCollections && showcaseView === "collections") showcaseView = "all";
   syncShowcaseViewButtons();
   hideAllShowcaseWraps();
   if (showcaseView === "genres") {
@@ -367,6 +386,8 @@ async function refreshShowcase(rooms) {
     renderRecommendations(rooms, recoData, authed);
   } else if (showcaseView === "friends") {
     renderFriendsActivity(rooms, friendsData);
+  } else if (showcaseView === "collections") {
+    renderCollectionsGallery(rooms);
   } else {
     renderCachedMovies(rooms);
   }
@@ -377,25 +398,26 @@ function syncShowcaseViewButtons() {
   $("showcaseViewGenresBtn").classList.toggle("sel", showcaseView === "genres");
   $("showcaseViewRecommendationsBtn").classList.toggle("sel", showcaseView === "recommendations");
   $("showcaseViewFriendsBtn").classList.toggle("sel", showcaseView === "friends");
+  $("showcaseViewCollectionsBtn").classList.toggle("sel", showcaseView === "collections");
 }
 
-/** Прячет все четыре обёртки видов разом — общая подготовка перед тем, как
+/** Прячет все обёртки видов разом — общая подготовка перед тем, как
     render-функция конкретного вида покажет свою (см. refreshShowcase и
     обработчики кнопок ниже). Один список id вместо повторения его в каждом
     обработчике — не разъедется, если появится ещё один вид. */
 function hideAllShowcaseWraps() {
-  for (const id of ["cachedMoviesWrap", "genreShelvesWrap", "recommendationsWrap", "friendsActivityWrap"]) $(id).hidden = true;
+  for (const id of ["cachedMoviesWrap", "genreShelvesWrap", "recommendationsWrap", "friendsActivityWrap", "collectionsWrap"]) $(id).hidden = true;
 }
 
 /** #showcaseToolbar (переключатель вида + сортировка/фильтр общего списка,
-    см. index.html) — общий родитель для всех четырёх обёрток видов,
-    поэтому его видимость и видимость #showcaseFlatControls внутри него
-    (сортировка+чип, которые имеют смысл только для общего списка) не решает
-    ни один из render* сам по себе — только эта функция, вызываемая в конце
-    каждого. Панель скрыта целиком, только когда показывать вообще нечего
-    (ни жанров, ни рекомендаций, ни друзей, И общий список пуст). */
+    см. index.html) — общий родитель для всех обёрток видов, поэтому его
+    видимость и видимость #showcaseFlatControls внутри него (сортировка+чип,
+    которые имеют смысл только для общего списка) не решает ни один из
+    render* сам по себе — только эта функция, вызываемая в конце каждого.
+    Панель скрыта целиком, только когда показывать вообще нечего (ни жанров,
+    ни рекомендаций, ни друзей, ни подборок, И общий список пуст). */
 function updateShowcaseToolbarVisibility() {
-  const hasExtraViews = !$("showcaseViewGenresBtn").hidden || !$("showcaseViewRecommendationsBtn").hidden || !$("showcaseViewFriendsBtn").hidden;
+  const hasExtraViews = !$("showcaseViewGenresBtn").hidden || !$("showcaseViewRecommendationsBtn").hidden || !$("showcaseViewFriendsBtn").hidden || !$("showcaseViewCollectionsBtn").hidden;
   const hasFlatMovies = !$("cachedMoviesWrap").hidden;
   $("showcaseToolbar").hidden = !hasExtraViews && !hasFlatMovies;
   $("showcaseFlatControls").hidden = showcaseView !== "all";
@@ -424,6 +446,12 @@ $("showcaseViewFriendsBtn").onclick = () => {
   syncShowcaseViewButtons();
   hideAllShowcaseWraps();
   renderFriendsActivity(state.rooms);
+};
+$("showcaseViewCollectionsBtn").onclick = () => {
+  showcaseView = "collections";
+  syncShowcaseViewButtons();
+  hideAllShowcaseWraps();
+  renderCollectionsGallery(state.rooms);
 };
 
 /** Витрина закэшированных фильмов (GET /api/movies?limit&offset&sort,
@@ -479,7 +507,7 @@ async function renderCachedMovies(rooms) {
   if (!fitsOnOnePage) {
     const pages = Math.max(1, Math.ceil(data.total / limit));
     const page = Math.floor(offset / limit) + 1;
-    $("cachedPagerLabel").textContent = `Стр. ${page} из ${pages}`;
+    renderPagerLabel(page, pages);
     const atStart = offset <= 0;
     const atEnd = offset + limit >= data.total;
     $("cachedPrevBtn").disabled = atStart;
@@ -490,7 +518,6 @@ async function renderCachedMovies(rooms) {
     // некуда.
     $("cachedSkipBackBtn").disabled = atStart;
     $("cachedSkipFwdBtn").disabled = atEnd;
-    $("cachedJumpInput").max = String(pages);
   }
   updateShowcaseToolbarVisibility();
 }
@@ -657,6 +684,80 @@ function friendsActivitySummary(friendMarks) {
   return friendMarks.map(f => f.score != null ? `${f.name} — ${f.score}` : `${f.name} — смотрел(а)`).join(", ");
 }
 
+/** Вкладка «Подборки» — витрина карточек-коллекций Кинопоиска (GET
+    /api/collections, живой запрос к poiskkino.dev — см. обсуждение в
+    refreshShowcase, поэтому запрашивается только тут, по клику на вкладку,
+    а не заранее вместе с genres/reco/friends). Карточка — сама подборка
+    (обложка+название+число фильмов), не фильм; клик уводит на
+    #/collection/:slug (showCollection), где уже настоящие плитки фильмов. */
+async function renderCollectionsGallery(rooms) {
+  const wrap = $("collectionsWrap");
+  wrap.hidden = false;
+  const box = $("collectionsList");
+  box.textContent = "";
+  const result = await act(() => api("/collections"));
+  const collections = (result && result.collections) || [];
+  $("collectionsEmpty").hidden = collections.length > 0;
+  for (const c of collections) box.append(renderCollectionCard(c));
+  updateShowcaseToolbarVisibility();
+}
+
+function renderCollectionCard(c) {
+  const btn = el("button", "collection-card");
+  btn.type = "button";
+  btn.innerHTML = `
+    ${c.coverUrl ? `<img class="collection-cover" src="${esc(c.coverUrl)}" alt="">` : '<div class="collection-cover"></div>'}
+    <div class="title">${esc(c.name)}</div>
+    ${c.moviesCount ? `<div class="muted sub">${c.moviesCount} фильмов</div>` : ""}
+  `;
+  btn.onclick = () => { location.hash = "#/collection/" + encodeURIComponent(c.slug); };
+  return btn;
+}
+
+/** Полная страница одной подборки (#/collection/:slug, GET
+    /api/collections/:slug) — курсорная пагинация, так poiskkino.dev отдаёт
+    коллекции («номера страницы» тут нет и быть не может), поэтому вместо
+    пейджера, как у витрины «Из базы» — «Показать ещё», дописывающий
+    следующую порцию в тот же .movie-grid, а не заменяющий её. Фильмы —
+    «тонкие» (те же поля, что у результатов /search: без genres-в-деталях/
+    watched/myScore — сервер их сюда не докладывает, см. комментарий в
+    server.js), поэтому renderAddToMenu тут с withWatched:false, тем же
+    приёмом, что renderSearchResultRow — состояние «просмотрено» отсюда
+    просто неизвестно, показывать пункт меню с неверным состоянием хуже,
+    чем не показывать вовсе; полная карточка (открывается кликом по плитке)
+    его всё равно подгрузит из своего personalList/markSummary. */
+async function showCollection(slug) {
+  showOnly("collectionView");
+  document.title = "Что смотрим? — подборка";
+  $("collectionTitle").textContent = "—";
+  $("collectionMeta").textContent = "";
+  $("collectionMovies").textContent = "";
+  $("collectionMoreRow").hidden = true;
+
+  const [data, roomsData] = await Promise.all([
+    act(() => api(`/collections/${encodeURIComponent(slug)}`)),
+    act(() => api("/rooms")),
+  ]);
+  if (!data) { location.hash = "#/"; return; }
+  const rooms = roomsData ? roomsData.rooms : [];
+  document.title = `Что смотрим? — ${data.name}`;
+  $("collectionTitle").textContent = data.name;
+  $("collectionMeta").textContent = data.moviesCount ? `${data.moviesCount} фильмов` : "";
+
+  const box = $("collectionMovies");
+  for (const mv of data.movies) box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv, rooms, null, { withWatched: false }) }));
+
+  let next = data.next;
+  $("collectionMoreRow").hidden = !data.hasNext;
+  $("collectionMoreBtn").onclick = () => act(async () => {
+    const more = await api(`/collections/${encodeURIComponent(slug)}?next=${encodeURIComponent(next)}`);
+    if (!more) return;
+    for (const mv of more.movies) box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv, rooms, null, { withWatched: false }) }));
+    next = more.next;
+    $("collectionMoreRow").hidden = !more.hasNext;
+  });
+}
+
 $("cachedSortSelect").onchange = e => {
   showcaseState.sort = e.target.value;
   showcaseState.offset = 0; // иначе можно улететь на несуществующую страницу новой сортировки
@@ -690,18 +791,55 @@ $("cachedSkipFwdBtn").onclick = () => {
   showcaseState.offset = Math.min(maxShowcaseOffset(), showcaseState.offset + showcaseState.limit * 10);
   renderCachedMovies(state.rooms);
 };
-// Переход на конкретную страницу — 1-индексация в поле ввода (привычнее
-// пользователю), внутри showcaseState по-прежнему offset. Страницу за
-// пределами реального диапазона (или мусор) не отвергаем ошибкой — просто
-// клампим к первой/последней.
-$("cachedJumpForm").onsubmit = e => {
-  e.preventDefault();
-  const page = parseInt($("cachedJumpInput").value, 10);
-  $("cachedJumpInput").value = "";
-  if (!Number.isFinite(page) || page < 1) return;
-  showcaseState.offset = Math.min(maxShowcaseOffset(), (page - 1) * showcaseState.limit);
-  renderCachedMovies(state.rooms);
-};
+
+/** Подпись «Стр. N из M» (см. renderCachedMovies) — число N кликабельно и
+    превращается в узкое числовое поле ПРЯМО НА МЕСТЕ. Раньше переход на
+    страницу был отдельной строкой (поле + кнопка «Перейти») под навигацией
+    — не понравилось, лишний разнородный элемент; так — без единого
+    дополнительного элемента интерфейса, кроме самой подписи. Событие
+    вешаем заново при каждом вызове — сама подпись целиком пересобирается
+    через innerHTML при каждом renderCachedMovies. 1-индексация в поле
+    (привычнее пользователю), внутри showcaseState по-прежнему offset. */
+function renderPagerLabel(page, pages) {
+  const label = $("cachedPagerLabel");
+  label.innerHTML = `Стр. <button type="button" class="pager-page-num" id="cachedPageNumBtn">${page}</button> из ${pages}`;
+  $("cachedPageNumBtn").onclick = () => {
+    const input = el("input", "pager-page-num-input");
+    input.type = "number";
+    input.min = "1";
+    input.max = String(pages);
+    input.value = String(page);
+    input.setAttribute("aria-label", "Перейти на страницу");
+    $("cachedPageNumBtn").replaceWith(input);
+    input.focus();
+    input.select();
+    // Страницу за пределами реального диапазона (или мусор) не отвергаем
+    // ошибкой — просто клампим к последней; если число не поменялось или
+    // это не число вовсе — просто закрываем поле, никуда не переходя (см.
+    // renderPagerLabel(page, pages) ниже — тот же путь, что у Escape/blur).
+    const commit = () => {
+      const v = parseInt(input.value, 10);
+      if (Number.isFinite(v) && v >= 1 && v !== page) {
+        showcaseState.offset = Math.min(maxShowcaseOffset(), (v - 1) * showcaseState.limit);
+        renderCachedMovies(state.rooms);
+      } else {
+        renderPagerLabel(page, pages);
+      }
+    };
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); commit(); }
+      else if (e.key === "Escape") { e.preventDefault(); renderPagerLabel(page, pages); }
+    });
+    // Потеря фокуса (клик мимо) — так же, как Escape: закрыть поле, не
+    // переходя никуда — случайный клик не должен уводить со страницы.
+    // isConnected — чтобы не сработать ВТОРОЙ раз, когда commit()/Escape
+    // уже сами заменили input на кнопку (замена уводит фокус и синхронно
+    // рождает свой blur, но к этому моменту input уже отключён от DOM).
+    input.addEventListener("blur", () => {
+      if (input.isConnected) renderPagerLabel(page, pages);
+    });
+  };
+}
 
 // Поиск фильмов прямо на главной, над витриной (#homeSearchWrap в index.html)
 // — тот же /api/search и тот же renderSearchResultRow, что и у поиска в
@@ -3238,8 +3376,30 @@ async function showPublicProfile(username) {
   // «просмотрено» — см. publicWatched на бэке), тогда бейдж на плитке
   // показывает оценку владельца профиля; отдельной секции «Оценки» больше
   // нет, она слита с «Просмотрено».
-  renderPublicMoviesInto($("publicProfileWatchedList"), data.watched, mv => mv.score);
-  renderPublicMoviesInto($("publicProfileWishlistList"), data.wishlist, () => null);
+  // Превью+«Показать все» — тот же приём, что на «Мои фильмы»
+  // (PROFILE_PREVIEW_LIMIT ниже по файлу): сервер и так отдаёт оба списка
+  // целиком без лимита (GET /api/users/:username), поэтому «Показать все»
+  // просто дорисовывает уже полученные данные — новый запрос не нужен.
+  renderPublicProfileSection($("publicProfileWatchedList"), $("publicProfileWatchedMoreBtn"), data.watched, mv => mv.score);
+  renderPublicProfileSection($("publicProfileWishlistList"), $("publicProfileWishlistMoreBtn"), data.wishlist, () => null);
+}
+
+/** Обёртка вокруг renderPublicMoviesInto с превью в PROFILE_PREVIEW_LIMIT
+    штук и кнопкой «Показать все» — та же логика, что у showProfile
+    (renderWatchedInto/renderMyListInto там), просто без перехода на
+    отдельную страницу: у чужого профиля нет своих #/user/:username/watched
+    и т.п. страниц, «Показать все» просто дорисовывает то, что уже есть в
+    data целиком (см. showPublicProfile) — обратно к превью не сворачиваем,
+    как и «Мои фильмы» не сворачивает обратно после перехода на полный
+    список. */
+function renderPublicProfileSection(container, moreBtn, items, scoreOf) {
+  const fitsPreview = items.length <= PROFILE_PREVIEW_LIMIT;
+  moreBtn.hidden = fitsPreview;
+  renderPublicMoviesInto(container, fitsPreview ? items : items.slice(0, PROFILE_PREVIEW_LIMIT), scoreOf);
+  moreBtn.onclick = () => {
+    moreBtn.hidden = true;
+    renderPublicMoviesInto(container, items, scoreOf);
+  };
 }
 
 /** Плитки чужого профиля — тот же .movie-tile, что и везде, но БЕЗ меню

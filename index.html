@@ -153,6 +153,7 @@
       <button type="button" id="showcaseViewGenresBtn">По жанрам</button>
       <button type="button" id="showcaseViewRecommendationsBtn">Рекомендации</button>
       <button type="button" id="showcaseViewFriendsBtn">Друзья</button>
+      <button type="button" id="showcaseViewCollectionsBtn">Подборки</button>
     </div>
     <div class="showcase-flat-controls" id="showcaseFlatControls">
       <button class="chip" id="cachedGenreChip" type="button" hidden></button>
@@ -224,6 +225,17 @@
     </div>
   </div>
 
+  <!-- Подборки Кинопоиска (GET /api/collections, см. renderCollectionsGallery
+       в app.js) — живой запрос к poiskkino.dev на каждый заход (не наш кэш),
+       поэтому, как и поиск в шапке, доступно только вошедшим — анониму
+       вкладка не показывается вовсе (см. refreshShowcase). Карточки
+       подборок, не фильмов — клик уводит на #/collection/:slug
+       (showCollection), там уже сами фильмы обычными плитками. -->
+  <div id="collectionsWrap" hidden>
+    <p class="muted" id="collectionsEmpty" hidden>Подборок пока не нашлось.</p>
+    <div class="collection-grid" id="collectionsList"></div>
+  </div>
+
   <!-- Витрина последних закэшированных фильмов (GET /api/movies) — секция
        скрыта целиком, пока кэш пуст (см. renderCachedMovies в app.js), пока
        на главной активен поиск выше (см. homeSearchInput в app.js — вместо
@@ -234,10 +246,12 @@
          перелистывания жмутся к краям, подпись страницы — строго по центру
          (не приблизительно через space-between — тогда центр съезжал бы от
          разной ширины левой/правой групп кнопок). Переход на конкретную
-         страницу — отдельной строкой ПОД навигацией, не в один ряд с ней:
-         впритык с пятью кнопками полю и кнопке «Перейти» не хватало места,
-         сжимались до нечитаемого пятна (см. .pager-jump button ниже — теперь
-         flex:none, задел на будущее, если снова окажутся тесно). -->
+         страницу — не отдельная форма (раньше была отдельная строка с полем
+         и кнопкой «Перейти» под навигацией — не понравилось, лишний
+         разнородный элемент), а сам номер страницы внутри подписи: клик по
+         числу превращает его в узкое поле ввода прямо на месте (см.
+         renderPagerLabel в app.js). Само содержимое подписи — целиком из
+         app.js (renderPagerLabel), тут только пустой контейнер. -->
     <div class="pager" id="cachedPager">
       <div class="pager-nav">
         <div class="pager-side">
@@ -250,14 +264,6 @@
           <button class="btn outlined sm" id="cachedSkipFwdBtn" title="Вперёд на 10 страниц" aria-label="Вперёд на 10 страниц">»</button>
         </div>
       </div>
-      <!-- novalidate — min/max на инпуте ниже только красят стрелочки
-           спиннера, а не блокируют отправку: страницу за пределами диапазона
-           не отвергаем нативной валидацией (пользователь просто ничего не
-           увидит), а клампим сами в обработчике (см. app.js). -->
-      <form class="pager-jump" id="cachedJumpForm" novalidate>
-        <input type="number" min="1" id="cachedJumpInput" class="pager-jump-input" placeholder="№" aria-label="Перейти на страницу">
-        <button class="btn outlined sm" type="submit">Перейти</button>
-      </form>
     </div>
   </div>
 </section>
@@ -352,7 +358,11 @@
      пользователя на Кинопоиске (аватар-заглушка+имя, «Просмотрено» — своя
      оценка на плитке, если есть, «Хочет посмотреть»), без копирования один
      в один: тот же .movie-grid и те же плитки, что и везде в сервисе, просто
-     без меню действий — чужой профиль только смотрят, а не редактируют. -->
+     без меню действий — чужой профиль только смотрят, а не редактируют.
+     Превью+«Показать все» — тот же приём, что на «Мои фильмы»
+     (PROFILE_PREVIEW_LIMIT в app.js): сервер и так отдаёт списки целиком,
+     без лимита, поэтому «Показать все» ничего не грузит заново — просто
+     дорисовывает уже полученные данные (см. showPublicProfile). -->
 <section id="publicProfileView" hidden>
   <a class="backlink" href="#/">← На главную</a>
   <div class="public-profile-head">
@@ -363,11 +373,21 @@
     </div>
   </div>
 
-  <h2>Просмотрено</h2>
+  <div class="title-row">
+    <h2>Просмотрено</h2>
+    <div class="title-actions">
+      <button class="btn tonal sm" id="publicProfileWatchedMoreBtn" type="button" hidden>Показать все</button>
+    </div>
+  </div>
   <p class="muted" id="publicProfileWatchedEmpty">Пока ничего не отмечено просмотренным.</p>
   <div class="movie-grid" id="publicProfileWatchedList"></div>
 
-  <h2>Хочет посмотреть</h2>
+  <div class="title-row">
+    <h2>Хочет посмотреть</h2>
+    <div class="title-actions">
+      <button class="btn tonal sm" id="publicProfileWishlistMoreBtn" type="button" hidden>Показать все</button>
+    </div>
+  </div>
   <p class="muted" id="publicProfileWishlistEmpty">Список пуст.</p>
   <div class="movie-grid" id="publicProfileWishlistList"></div>
 </section>
@@ -722,6 +742,24 @@
   <h1>Что мы смотрели</h1>
   <p class="muted" id="watchedEmpty">Пока ничего не отмечено просмотренным.</p>
   <div class="movie-grid" id="watchedList"></div>
+</section>
+
+<!-- ===================== ПОДБОРКА КИНОПОИСКА (#/collection/:slug) =====================
+     GET /api/collections/:slug, см. showCollection в app.js. Список фильмов
+     курсорный (poiskkino.dev так отдаёт коллекции) — «номера страницы» тут
+     нет и не может быть, поэтому вместо пейджера у витрины «Из базы» —
+     обычная кнопка «Показать ещё», дописывающая следующую порцию в тот же
+     .movie-grid. Плитки — renderMovieTile, тот же компонент, что и везде,
+     полноценно кликабельны (открывают карточку фильма, добавляют в
+     комнату/список и т.п.). -->
+<section id="collectionView" hidden>
+  <a class="backlink" href="#/">← Все комнаты</a>
+  <h1 id="collectionTitle">—</h1>
+  <p class="muted" id="collectionMeta"></p>
+  <div class="movie-grid" id="collectionMovies"></div>
+  <div class="row" id="collectionMoreRow" hidden>
+    <button class="btn tonal sm" id="collectionMoreBtn" type="button">Показать ещё</button>
+  </div>
 </section>
 
 <!-- ===================== МОЙ СПИСОК (без привязки к комнате) ===================== -->

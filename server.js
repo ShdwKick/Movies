@@ -31,9 +31,12 @@
  *   AUTH_JWKS_URL  (по умолчанию AUTH_ISSUER + /.well-known/jwks.json)
  *   POISKKINO_API_KEY   — ключ поиска фильмов (api.poiskkino.dev). Без него
  *                  поиск/добавление фильмов отвечают 503 — остальной сервис
- *                  работает как обычно.
+ *                  работает как обычно. Можно несколько через запятую
+ *                  (key1,key2,...) — при исчерпании суточной квоты одного
+ *                  ключа сервис сам переключается на следующий (см. poiskkino.js).
  *   POISKKINO_DAILY_CAP (по умолчанию 190) — мягкий потолок обращений в сутки
- *                  (UTC), ниже настоящего лимита провайдера (200/сутки).
+ *                  (UTC) НА КАЖДЫЙ ключ, ниже настоящего лимита провайдера
+ *                  (обычно 200/сутки).
  */
 "use strict";
 
@@ -137,11 +140,27 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_room_movies_room  ON room_movies(room_id);
   CREATE INDEX IF NOT EXISTS idx_room_movies_movie ON room_movies(kinopoisk_id);
 
-  -- Счётчик обращений к poiskkino.dev по суткам (UTC) — ведёт сам poiskkino.js,
-  -- здесь только создаём таблицу вместе с остальной схемой.
+  -- Старый счётчик обращений к poiskkino.dev — на один ключ, без key_idx.
+  -- Больше не используется (см. poiskkino_key_usage ниже — поддержка
+  -- нескольких ключей потребовала третьего измерения в PRIMARY KEY, а
+  -- ALTER TABLE в SQLite не умеет менять PK, отсюда новая таблица, а не
+  -- миграция этой), оставлена только чтобы не терять день-в-день историю
+  -- на базах, где она уже накопилась, и не переусложнять апгрейд DROP'ом.
   CREATE TABLE IF NOT EXISTS api_usage (
     day   TEXT PRIMARY KEY,
     calls INTEGER NOT NULL DEFAULT 0
+  );
+
+  -- Счётчик обращений к poiskkino.dev по суткам (UTC) И по ключу (несколько
+  -- ключей — см. POISKKINO_API_KEY ниже и poiskkino.js) — ведёт сам
+  -- poiskkino.js, здесь только создаём таблицу вместе с остальной схемой.
+  -- key_idx — порядковый номер ключа в списке, не сам ключ (см. комментарий
+  -- в шапке poiskkino.js — секрет незачем хранить лишний раз).
+  CREATE TABLE IF NOT EXISTS poiskkino_key_usage (
+    day     TEXT NOT NULL,
+    key_idx INTEGER NOT NULL,
+    calls   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, key_idx)
   );
 
   -- Личное отношение (пользователь, фильм) — ГЛОБАЛЬНО, без room_id, как явно
@@ -297,14 +316,21 @@ db.exec(`UPDATE movie_marks SET watched = 1, watched_at = rated_at WHERE score I
 // Лог для Admin (см. admin-internal.js) — своя таблица поверх той же базы.
 const adminLog = createAdminLog(db);
 
+// Несколько ключей — через запятую в той же переменной (POISKKINO_API_KEY=
+// key1,key2,key3): один ключ без запятых работает как раньше, без изменений
+// для существующих деплоев. poiskkino.js сам переключается на следующий
+// ключ, когда у текущего кончается суточная квота (см. там).
 const POISKKINO_DAILY_CAP = parseInt(process.env.POISKKINO_DAILY_CAP || "190", 10);
+const POISKKINO_API_KEYS = (process.env.POISKKINO_API_KEY || "").split(",").map(k => k.trim()).filter(Boolean);
 const poiskkino = require("./poiskkino")({
-  apiKey: process.env.POISKKINO_API_KEY || "",
+  apiKeys: POISKKINO_API_KEYS,
   dailyCap: POISKKINO_DAILY_CAP,
   db,
 });
 if (!poiskkino.enabled) {
   console.warn("POISKKINO_API_KEY не задан — поиск и добавление фильмов отвечают 503.");
+} else if (poiskkino.keyCount > 1) {
+  console.log(`poiskkino.dev: ${poiskkino.keyCount} ключей, до ${poiskkino.totalDailyCap} обращений в сутки суммарно.`);
 }
 
 // Импорт (сейчас — только резолв IMDb-записей, у которых нет ни локального
@@ -1197,11 +1223,15 @@ function buildFriendsActivity(userId, friends, limit) {
 }
 
 /** Единая обработка ошибок poiskkino.js — квота/не настроено/апстрим в осмысленные HTTP-коды. */
-function poiskkinoError(res, e) {
+// what — по умолчанию сообщения про фильм/kinopoisk_id (исторически
+// единственный вызывающий), для коллекций (см. GET /api/collections/:slug)
+// передаём свой текст — «не найден фильм» звучало бы странно для
+// несуществующего slug'а подборки.
+function poiskkinoError(res, e, what = { notFound: "Фильм с таким kinopoisk_id не найден в poiskkino.dev.", badRequest: "poiskkino.dev не принял запрос — проверьте kinopoisk_id." }) {
   if (e && e.quota) return json(res, 429, { error: "quota", message: e.message });
   if (e && e.notConfigured) return json(res, 503, { error: "not configured", message: e.message });
-  if (e && e.status === 404) return json(res, 404, { error: "not found", message: "Фильм с таким kinopoisk_id не найден в poiskkino.dev." });
-  if (e && e.status === 400) return json(res, 400, { error: "bad request", message: "poiskkino.dev не принял запрос — проверьте kinopoisk_id." });
+  if (e && e.status === 404) return json(res, 404, { error: "not found", message: what.notFound });
+  if (e && e.status === 400) return json(res, 400, { error: "bad request", message: what.badRequest });
   console.error("poiskkino.dev:", e);
   return json(res, 502, { error: "upstream", message: "poiskkino.dev недоступен, попробуйте позже." });
 }
@@ -1939,6 +1969,60 @@ async function api(req, res, seg, user, query) {
     })) });
   }
 
+  // ── подборки Кинопоиска (poiskkino.dev, «Коллекции кино») — тот же
+  // принцип, что и /search выше: живой запрос к provider'у на каждый вызов
+  // (не наш кэш, тратит общую суточную квоту), поэтому НЕ в
+  // isPublicGetRoute — доступ только по токену, анониму собственно как и
+  // /search недоступен (фронт прячет саму вкладку анониму, см. app.js).
+  // Список фильмов внутри отдаём «тонким» — теми же полями, что и /search:
+  // ensureMovieCached/полную карточку с жанрами-актёрами подгружает уже
+  // сам openMovieInfoModal при клике на конкретный фильм, докешировать
+  // все 250 фильмов топ-250 разом при простом заходе на вкладку было бы
+  // самоубийством для дневной квоты.
+  if (seg.length === 2 && seg[1] === "collections") {
+    if (m !== "GET") return json(res, 405, { error: "method not allowed" });
+    const category = str(query.get("category"), 50);
+    const next = str(query.get("next"), 1000);
+    let data;
+    try { data = await poiskkino.listCollections({ category, limit: 30, next }); }
+    catch (e) { return poiskkinoError(res, e); }
+    const docs = Array.isArray(data.docs) ? data.docs : [];
+    return json(res, 200, {
+      collections: docs.map(c => ({
+        slug: c.slug, name: c.name, category: c.category,
+        moviesCount: c.moviesCount, coverUrl: c.cover?.url || c.cover?.previewUrl || null,
+      })),
+      next: data.next, hasNext: !!data.hasNext,
+    });
+  }
+  if (seg.length === 3 && seg[1] === "collections") {
+    if (m !== "GET") return json(res, 405, { error: "method not allowed" });
+    const slug = str(seg[2], 100);
+    const next = str(query.get("next"), 1000);
+    let data;
+    try { data = await poiskkino.getCollection(slug, { limit: 50, next }); }
+    catch (e) {
+      return poiskkinoError(res, e, {
+        notFound: "Подборка с таким адресом не найдена.",
+        badRequest: "poiskkino.dev не принял запрос — проверьте адрес подборки.",
+      });
+    }
+    const items = Array.isArray(data.movies?.docs) ? data.movies.docs : [];
+    return json(res, 200, {
+      name: data.name, category: data.category, moviesCount: data.moviesCount,
+      coverUrl: data.cover?.url || data.cover?.previewUrl || null,
+      movies: items.map(item => {
+        const mv = mapMovie(item.movie);
+        return {
+          position: item.position,
+          kinopoiskId: mv.kinopoiskId, title: mv.title, altTitle: mv.altTitle, year: mv.year,
+          posterUrl: mv.posterUrl, kpRating: mv.kpRating, imdbRating: mv.imdbRating, genres: mv.genres,
+        };
+      }),
+      next: data.movies?.next || null, hasNext: !!data.movies?.hasNext,
+    });
+  }
+
   // ── витрина «Из базы» на главной: последние закэшированные фильмы ─
   // Обычная авторизация, без привязки к комнате — тот же глобальный кэш
   // movies, что используют поиск/комнаты/личный список.
@@ -2616,7 +2700,11 @@ const server = http.createServer(async (req, res) => {
         rooms: db.prepare("SELECT COUNT(*) AS n FROM rooms").get().n,
         movies: db.prepare("SELECT COUNT(*) AS n FROM movies").get().n,
         selectionEvents: db.prepare("SELECT COUNT(*) AS n FROM selection_events").get().n,
-        apiUsage: poiskkino.enabled ? `${poiskkino.usageToday()}/${POISKKINO_DAILY_CAP}` : "выключен",
+        // totalDailyCap — сумма по всем ключам (dailyCap на каждый), не
+        // POISKKINO_DAILY_CAP голый: с несколькими ключами тот был бы
+        // меньше реальной суммарной ёмкости и выглядел бы как перерасход
+        // квоты, хотя это не так (см. poiskkino.js).
+        apiUsage: poiskkino.enabled ? `${poiskkino.usageToday()}/${poiskkino.totalDailyCap}${poiskkino.keyCount > 1 ? ` (${poiskkino.keyCount} ключа)` : ""}` : "выключен",
         roomsCreated7d: db.prepare("SELECT COUNT(*) AS n FROM rooms WHERE created_at > ?").get(since7d).n,
         selectionEvents7d: db.prepare("SELECT COUNT(*) AS n FROM selection_events WHERE created_at > ?").get(since7d).n,
       });
@@ -2707,6 +2795,14 @@ const server = http.createServer(async (req, res) => {
         oldestRequestedAt: row.oldest,
         apiUsage: poiskkino.enabled ? `${poiskkino.usageToday()}/${IMPORT_DAILY_CAP}` : "выключен",
       });
+    }
+
+    // Расход квоты по каждому ключу poiskkino.dev отдельно (см. poiskkino.js
+    // — несколько ключей через запятую в POISKKINO_API_KEY, автопереключение
+    // при исчерпании) — только видимость, без самих значений ключей.
+    if (p === "/internal/poiskkino/keys" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      return json(res, 200, { enabled: poiskkino.enabled, keys: poiskkino.enabled ? poiskkino.keysStatus() : [] });
     }
 
     // Адрес auth отдаём фронту, чтобы он не был зашит в статику.

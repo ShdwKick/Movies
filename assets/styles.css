@@ -434,6 +434,27 @@ select{
    вместо grid-gap). */
 .movie-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(12.5rem,1fr));margin-top:10px}
 
+/* Подборки Кинопоиска (#collectionsWrap, см. renderCollectionsGallery в
+   app.js) — карточка коллекции, тот же визуальный язык, что у .movie-tile
+   (поверхность/рамка/радиус/тень/hover), но обложка широкая (баннер), не
+   постер 2/3 — cover у poiskkino.dev именно такой. Сама карточка — <button>
+   (не div[role=button], как у .movie-tile) — внутри нет вложенных
+   интерактивных элементов (меню/кнопок), клик только один — открыть
+   подборку, нативная кнопка проще и без ручной клавиатурной поддержки. */
+.collection-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));margin-top:10px}
+.collection-card{
+  position:relative;display:flex;flex-direction:column;gap:.4rem;
+  background:var(--md-sys-color-surface-container-lowest);
+  border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-l);
+  padding:10px;cursor:pointer;text-align:left;font:inherit;color:inherit;width:100%;
+  box-shadow:var(--e1);transition:transform .18s var(--ease-emph),box-shadow .18s;
+}
+.collection-card:hover{transform:translateY(-2px);box-shadow:var(--e2)}
+.collection-card:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
+.collection-card .collection-cover{width:100%;aspect-ratio:16/9;display:block;object-fit:cover;border-radius:var(--md-sys-shape-corner-m);background:var(--md-sys-color-surface-container-high)}
+.collection-card .title{font-weight:650;font-size:14px;line-height:1.25}
+
 /* Разделитель от блоков про комнаты (список/код приглашения выше) — раньше
    стоял на #cachedMoviesWrap, но #homeSearchWrap (поиск на главной) вставал
    МЕЖДУ ними без какого-либо отступа и визуально читался как продолжение
@@ -494,15 +515,13 @@ select{
    остаётся видимой (.showcase-toolbar не трогаем). */
 .pager{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.8rem;margin-top:1rem}
 /* Витрина «Из базы» (#cachedPager) — единственный пейджер с доп. навигацией
-   (±10 страниц, переход на конкретную) поверх обычных «Назад»/«Вперёд»: у
-   #roomsPager своих детей всего три (кнопка/подпись/кнопка) и своей
-   разметки под них нет — стили ниже завязаны на классы .pager-nav/
-   .pager-jump, которых у #roomsPager просто не встречается, .pager сам он
-   не трогает. #cachedPager переопределяет .pager на колонку: сверху строка
-   навигации на всю ширину, под ней — переход на страницу, а не рядом (см.
-   .pager-jump ниже и комментарий в index.html — впритык с пятью кнопками
-   не хватало места).*/
-#cachedPager{flex-direction:column;align-items:stretch}
+   (±10 страниц) поверх обычных «Назад»/«Вперёд»: у #roomsPager своих детей
+   всего три (кнопка/подпись/кнопка) и своей разметки под них нет — стили
+   ниже завязаны на класс .pager-nav, которого у #roomsPager просто не
+   встречается, .pager сам он не трогает. align-items:stretch — чтобы
+   .pager-nav (grid на всю ширину, см. ниже) не сжимался до содержимого
+   унаследованным от .pager align-items:center. */
+#cachedPager{align-items:stretch}
 /* Три колонки, не space-between — так подпись страницы садится РОВНО по
    центру независимо от того, что левая группа (« ← Назад) и правая
    (Вперёд → ») разной ширины; space-between просто распределял бы зазоры
@@ -511,21 +530,26 @@ select{
 .pager-side{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
 .pager-side-right{justify-self:end;justify-content:flex-end}
 #cachedPagerLabel{justify-self:center;text-align:center}
-.pager-jump{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:.4rem}
-/* input.pager-jump-input, не просто .pager-jump-input — иначе ширину
-   перебивает глобальный input[type="number"]{width:100%} (element+atribute
-   у него специфичность (0,1,1), выше голого класса (0,1,0) — тот же приём,
-   что и у .draw-settings-slider-row input[type="number"] чуть выше). Именно
-   поэтому раньше поле всё равно было на всю ширину строки, даже с
-   width:4.4rem — правило просто не применялось. */
-input.pager-jump-input{width:3.2rem;flex:none}
-/* Без flex:none кнопку «Перейти» сжимало в тесном ряду (было впритык с
-   пятью кнопками навигации, см. index.html) — .btn сам по себе
-   overflow:hidden+border-radius:full, поджатый ниже своего содержимого он
-   превращался в маленький кружок с обрезанным текстом. Раскладка ниже уже
-   не тесная (своя строка), оставляем на случай, если станет тесно на узком
-   экране. */
-.pager-jump button{flex:none}
+/* Переход на страницу — кликабельное число ВНУТРИ самой подписи (см.
+   renderPagerLabel в app.js), не отдельная форма под навигацией (была
+   раньше — поле + кнопка «Перейти» отдельной строкой, не понравилось:
+   лишний, разнородный со всем остальным элемент). .pager-page-num — не
+   .btn, просто текст с пунктирным подчёркиванием: должен читаться как
+   ЧАСТЬ подписи «Стр. N из M», а не отдельный элемент управления рядом с
+   ней. */
+.pager-page-num{
+  all:unset; cursor:pointer; font:inherit; font-weight:600; color:var(--md-sys-color-primary);
+  border-bottom:1px dashed currentColor; line-height:1; padding:0 .05em;
+}
+.pager-page-num:hover, .pager-page-num:focus-visible{ color:var(--md-sys-color-on-surface); }
+/* input.pager-page-num-input, не просто класс — тот же приём, что и у
+   .draw-settings-slider-row input[type="number"] выше: element+class
+   специфичнее голого input[type="number"]{width:100%}, который иначе
+   растянул бы поле на всю ширину колонки подписи (та же грабля, на которую
+   раньше наступили с .pager-jump-input). */
+input.pager-page-num-input{
+  width:3.2rem; flex:none; text-align:center; padding:1px 4px; font:inherit; font-weight:600;
+}
 
 /* Компактная плитка витрины — постер (с меню «Добавить в…» бейджем поверх
    обложки) и строка название/год + «Смотреть» (см. renderMovieTile в app.js).
