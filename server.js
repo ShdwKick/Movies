@@ -1635,18 +1635,36 @@ async function importKinopoiskCollection(sourceSlug) {
   stmt.collectionUpsert.run(id, sourceSlug, name, "kinopoisk", sourceSlug, coverUrl, existing ? existing.created_at : ts, ts);
   stmt.collectionMoviesDeleteAll.run(id);
 
-  let queued = 0, alreadyCached = 0, position = 0;
+  // Кинопоиск в старых/автосгенерированных подборках (топ по годам и т.п.)
+  // иногда ссылается на фильм, которого у самого Кинопоиска уже нет —
+  // item.movie тогда null. Раньше mapMovie(null) падал с TypeError прямо
+  // здесь, ПОСЛЕ того как DELETE+INSERT для уже обработанных строк выше
+  // успели закоммититься (в node:sqlite нет неявной транзакции на функцию) —
+  // подборка оставалась молча наполовину записанной, а наверх при этом
+  // улетала общая 502 «poiskkino.dev недоступен», хотя дело было не в
+  // недоступности API, а в одном кривом элементе списка. Пропускаем такие
+  // строки (skipped), не роняя весь импорт.
+  let queued = 0, alreadyCached = 0, skipped = 0, imported = 0, position = 0;
   for (const item of items) {
     position++;
-    const mv = mapMovie(item.movie);
-    stmt.collectionMovieInsert.run(id, mv.kinopoiskId, position);
+    if (!item.movie || item.movie.id == null) { skipped++; continue; }
+    let mv;
+    try {
+      mv = mapMovie(item.movie);
+    } catch (e) {
+      skipped++;
+      adminLog.warn("Импорт подборки: пропущен фильм с неожиданными данными", { slug: sourceSlug, position, message: e.message });
+      continue;
+    }
+    imported++;
+    stmt.collectionMovieInsert.run(id, mv.kinopoiskId, imported);
     const existingMovie = stmt.movieByKpId.get(mv.kinopoiskId);
     if (existingMovie && existingMovie.detail_cached_at) { alreadyCached++; continue; }
     if (!existingMovie) ensureMovieShallow({ kinopoiskId: mv.kinopoiskId, title: mv.title, year: mv.year, posterUrl: mv.posterUrl });
     stmt.movieDetailQueueInsert.run(mv.kinopoiskId, ts);
     queued++;
   }
-  return { id, slug: sourceSlug, name, coverUrl, moviesCount: items.length, alreadyCached, queued, partial };
+  return { id, slug: sourceSlug, name, coverUrl, moviesCount: imported, skipped, alreadyCached, queued, partial };
 }
 
 /** IMDb-запись (imdb_id известен, kinopoisk_id — нет) → фильм в movies, в
@@ -2997,7 +3015,7 @@ const server = http.createServer(async (req, res) => {
       }
       adminLog[result.partial ? "warn" : "info"](
         result.partial ? "Подборка импортирована частично (не хватило квоты)" : "Подборка импортирована",
-        { slug, name: result.name, moviesCount: result.moviesCount, queued: result.queued, partial: result.partial }
+        { slug, name: result.name, moviesCount: result.moviesCount, skipped: result.skipped, queued: result.queued, partial: result.partial }
       );
       // Не await — ответ админу уходит сразу; докачку деталей запускаем
       // фоном тут же, а не ждём ближайший 15-минутный тик (тот же приём,
