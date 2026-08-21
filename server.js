@@ -35,17 +35,19 @@
  *                  (key1,key2,...) — при исчерпании суточной квоты одного
  *                  ключа сервис сам переключается на следующий (см. poiskkino.js).
  *   POISKKINO_DAILY_CAP (по умолчанию 190) — мягкий потолок обращений в сутки
- *                  (UTC) НА КАЖДЫЙ ключ, ниже настоящего лимита провайдера
- *                  (обычно 200/сутки).
- *   IMPORT_DAILY_CAP    (по умолчанию — автосчёт, см. ниже) — суточный потолок
- *                  ТОЛЬКО для фона (докат импорта, докачка деталей,
- *                  admin-скан библиотеки), пониже общего — чтобы не вытеснял
- *                  живых пользователей. По умолчанию не число, а формула:
- *                  суммарная ёмкость по всем ключам минус POISKKINO_RESERVE.
- *   POISKKINO_RESERVE   (по умолчанию 50) — сколько обращений в сутки всегда
- *                  оставлять свободными «на всякий случай» (не тратит их фон,
- *                  см. IMPORT_DAILY_CAP выше); не действует, если
- *                  IMPORT_DAILY_CAP задан явно.
+ *                  (UTC) НА КАЖДЫЙ ключ — ОЦЕНКА, не число от самого
+ *                  provider'а (тарифы у разных ключей на практике отличаются
+ *                  и бывают ниже; реальное исчерпание конкретного ключа
+ *                  ловит сам poiskkino.js по 403 от provider'а и сразу
+ *                  переключается на следующий — см. call() там).
+ *   POISKKINO_RESERVE   (по умолчанию 50) — сколько обращений в сутки фон
+ *                  (докат импорта, докачка деталей, admin-скан библиотеки)
+ *                  всегда оставляет свободными «на всякий случай», не для
+ *                  себя, а для живых действий человека (поиск/добавление).
+ *                  Резерв не размазан по всем ключам поровну — ключи ДО
+ *                  последнего фон расходует полностью (за ними всегда есть
+ *                  ещё один про запас), придерживает только последний, и
+ *                  только под конец (см. importQuotaAvailable ниже).
  */
 "use strict";
 
@@ -221,7 +223,7 @@ db.exec(`
   -- Импорт оценок/списков с IMDb/Кинопоиска (см. importKinopoisk/importImdb
   -- ниже) кладёт сюда те записи, которые не удалось сразу сопоставить с
   -- нашим кэшем movies и для которых не хватило сегодняшней ИМПОРТНОЙ доли
-  -- квоты poiskkino.dev (см. IMPORT_DAILY_CAP) — drainImportQueue() достаёт
+  -- квоты poiskkino.dev (см. importQuotaAvailable) — drainImportQueue() достаёт
   -- их порциями по мере появления свободной квоты, в т.ч. на следующие сутки.
   -- У Кинопоиска в очередь ничего не попадает: там весь нужный минимум
   -- (title/year/poster) есть прямо со страницы профиля, сеть не нужна —
@@ -376,28 +378,40 @@ if (!poiskkino.enabled) {
 // Фон (резолв IMDb-записей без локального совпадения — drainImportQueue,
 // докачка деталей фильмов от расширения — drainMovieDetailQueue, скан
 // библиотеки админом — drainLibraryScan) не должен вытеснять обычные
-// запросы пользователей (поиск/добавление фильма, подборки) — тот же общий
-// счётчик api_usage, что и у poiskkino.js, просто фон сам останавливается
-// раньше общего потолка, оставляя разницу свободной под обычное
-// использование сервиса в течение дня.
+// запросы пользователей (поиск/добавление фильма, подборки).
 //
-// По умолчанию потолок фона считается сам: суммарная суточная ёмкость по
-// ВСЕМ ключам (poiskkino.totalDailyCap — несколько ключей через запятую в
-// POISKKINO_API_KEY, см. poiskkino.js) МИНУС резерв «на всякий случай»
-// (POISKKINO_RESERVE, по умолчанию 50). Так лимит фона растёт сам вместе с
-// числом добавленных ключей, а не остаётся прибитым к числу, посчитанному
-// когда-то под один ключ. Явный IMPORT_DAILY_CAP в окружении всё ещё
-// побеждает автосчёт — на случай, если он кому-то не подойдёт.
+// Раньше резерв (POISKKINO_RESERVE) вычитался из СУММЫ по всем ключам
+// (poiskkino.totalDailyCap), т.е. размазывался по всем ключам поровну. Не
+// нужно: ключи заполняются строго по очереди (см. pickKey в poiskkino.js —
+// «добить первый до конца, потом следующий»), поэтому и просаживать все
+// нужно ТОЛЬКО у последнего — у любого более раннего ключа впереди всегда
+// есть ещё один в запасе, недобор там ничего не бережёт, только зря
+// тормозит фон раньше времени.
 //
-// Проверяется через poiskkino.usageToday() (сумма по всем ключам) — своего
-// отдельного счётчика заводить не нужно, оба предела читают одно и то же
-// значение.
+// beforeLastKeyIdx все исчерпаны (по НАШЕЙ оценке calls/cap — она
+// самокорректируется: как только provider реально ответит 403 раньше, чем
+// мы предполагали, poiskkino.js тут же помечает этот ключ исчерпанным, см.
+// markExhausted в call()) → мы «на последнем» → фону дальше можно только
+// пока на нём остаётся больше POISKKINO_RESERVE. Пока не добрались до
+// последнего — фону есть, откуда брать, резерв ни на что не влияет.
 const POISKKINO_RESERVE = parseInt(process.env.POISKKINO_RESERVE || "50", 10);
-const IMPORT_DAILY_CAP = process.env.IMPORT_DAILY_CAP != null
-  ? parseInt(process.env.IMPORT_DAILY_CAP, 10)
-  : Math.max(0, poiskkino.totalDailyCap - POISKKINO_RESERVE);
 function importQuotaAvailable() {
-  return poiskkino.usageToday() < IMPORT_DAILY_CAP;
+  const keys = poiskkino.keysStatus();
+  if (!keys.length) return false;
+  const lastIdx = keys.length - 1;
+  const beforeLastExhausted = keys.slice(0, lastIdx).every(k => k.calls >= k.cap);
+  if (!beforeLastExhausted) return true;
+  const last = keys[lastIdx];
+  return (last.cap - last.calls) > POISKKINO_RESERVE;
+}
+/** Текстом для логов/админки — та же пара чисел, что и раньше у
+    IMPORT_DAILY_CAP, плюс явно написано, придерживает ли сейчас резерв
+    фон (см. importQuotaAvailable выше — не всегда очевидно из одних чисел,
+    т.к. резерв не размазан по всем ключам). */
+function importQuotaText() {
+  if (!poiskkino.enabled) return "выключен";
+  const base = `${poiskkino.usageToday()}/${poiskkino.totalDailyCap}`;
+  return importQuotaAvailable() ? base : `${base} (резерв — фон ждёт освобождения квоты)`;
 }
 
 // Максимум комнат в собственности у одного пользователя (см. POST /rooms
@@ -1911,7 +1925,7 @@ async function drainMovieDetailQueue(batchSize = MOVIE_DETAIL_QUEUE_MAX_PER_CALL
     if (!poiskkino.enabled) return;
     if (!importQuotaAvailable()) {
       const pending = stmt.movieDetailQueueStats.get().n;
-      if (pending > 0) adminLog.info("Очередь деталей: ждёт квоту", { pending, quota: `${poiskkino.usageToday()}/${IMPORT_DAILY_CAP}` });
+      if (pending > 0) adminLog.info("Очередь деталей: ждёт квоту", { pending, quota: importQuotaText() });
       return;
     }
     const batch = stmt.movieDetailQueueBatch.all(batchSize);
@@ -1958,7 +1972,7 @@ let libraryScanBusy = false;
 // непрерывно, а не «20 штук — и тишина на 15 минут до следующего тика» (баг,
 // с которого начался этот тред: прогресс замирал, и было не отличить завис
 // он или просто ждёт). Верхний предел теперь чисто защитный (см. вызов ниже)
-// — реальный тормоз всё равно IMPORT_DAILY_CAP, сетевые походы им и так
+// — реальный тормоз всё равно importQuotaAvailable(), сетевые походы им и так
 // ограничены; periodic-тик остаётся только на случай перезапуска сервиса
 // посреди скана или возобновления на следующие сутки, когда квота освежится.
 const LIBRARY_SCAN_MAX_PER_CALL = 5000;
@@ -1966,8 +1980,8 @@ const LIBRARY_SCAN_MAX_PER_CALL = 5000;
 const LIBRARY_SCAN_HEARTBEAT_MS = 10 * 1000;
 
 /** Докатывает library_scan (см. таблицу и POST /internal/library/scan) —
-    непрерывно, пока не кончится диапазон, квота (IMPORT_DAILY_CAP, не общий
-    dailyCap — скан не должен вытеснять живых пользователей) или админ не
+    непрерывно, пока не кончится диапазон, квота (importQuotaAvailable — фон
+    держит резерв на последнем ключе, не должен вытеснять живых пользователей) или админ не
     остановит сам. Уже закэшированные id (есть detail_cached_at) не трогают
     сеть вовсе — тот же признак, что у ensureMovieCached. */
 async function drainLibraryScan(maxPerCall = LIBRARY_SCAN_MAX_PER_CALL) {
@@ -2020,7 +2034,7 @@ async function drainLibraryScan(maxPerCall = LIBRARY_SCAN_MAX_PER_CALL) {
       if (now() - lastHeartbeat >= LIBRARY_SCAN_HEARTBEAT_MS) {
         adminLog.info("Скан библиотеки: идёт", {
           nextId: id, toId: st.to_id, added, cached, notFound, errors,
-          quota: `${poiskkino.usageToday()}/${IMPORT_DAILY_CAP}`,
+          quota: importQuotaText(),
         });
         lastHeartbeat = now();
       }
@@ -2054,7 +2068,7 @@ function libraryScanPayload() {
     errors: st ? st.errors : 0,
     startedAt: st ? st.started_at : null,
     updatedAt: st ? st.updated_at : null,
-    apiUsage: poiskkino.enabled ? `${poiskkino.usageToday()}/${IMPORT_DAILY_CAP}` : "выключен",
+    apiUsage: importQuotaText(),
   };
 }
 
@@ -2971,7 +2985,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         pending: row.n,
         oldestRequestedAt: row.oldest,
-        apiUsage: poiskkino.enabled ? `${poiskkino.usageToday()}/${IMPORT_DAILY_CAP}` : "выключен",
+        apiUsage: importQuotaText(),
       });
     }
 
