@@ -258,6 +258,37 @@ db.exec(`
     attempts     INTEGER NOT NULL DEFAULT 0
   );
 
+  -- Подборки, которые мы завели у себя — сейчас только импортом с
+  -- Кинопоиска (source='kinopoisk', POST /internal/collections/import), но
+  -- схема сразу под оба случая: source='custom' — задел под «свои»
+  -- подборки (план, обсуждали как следующий шаг после этой задачи), чтобы
+  -- не переделывать схему ещё раз. slug — свой, для source='kinopoisk' по
+  -- умолчанию совпадает с кинопоисковским (source_slug), но не обязан —
+  -- пригодится, если понадобится локальное имя, отличное от их адреса.
+  CREATE TABLE IF NOT EXISTS collections (
+    id          TEXT PRIMARY KEY,
+    slug        TEXT NOT NULL UNIQUE,
+    name        TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT 'custom',  -- kinopoisk | custom
+    source_slug TEXT,  -- slug у Кинопоиска (source='kinopoisk') — для повторного импорта/обновления
+    cover_url   TEXT,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+  );
+
+  -- Фильмы подборки с позицией (сохраняем порядок — Кинопоиска или, позже,
+  -- свой ручной для source='custom'). Повторный импорт того же slug
+  -- ПОЛНОСТЬЮ заменяет набор строк (см. importKinopoiskCollection) — состав
+  -- и порядок у Кинопоиска мог измениться, «дописать недостающее» тут смысла
+  -- не имеет, честнее пересобрать заново.
+  CREATE TABLE IF NOT EXISTS collection_movies (
+    collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    kinopoisk_id  INTEGER NOT NULL REFERENCES movies(kinopoisk_id),
+    position      INTEGER NOT NULL,
+    PRIMARY KEY (collection_id, kinopoisk_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_collection_movies_collection ON collection_movies(collection_id, position);
+
   -- Локальный справочник «кого мы видели» — username/display_name по
   -- user_id, для публичного профиля (GET /api/users/:username ниже).
   -- Auth НЕ отдаёт другим сервисам общий каталог пользователей (см.
@@ -628,6 +659,24 @@ const stmt = {
   // Для админки (см. GET /internal/movies/detail-queue) — общий размер
   // очереди и самая старая заявка, чтобы было видно, застряла она или нет.
   movieDetailQueueStats: db.prepare("SELECT COUNT(*) AS n, MIN(requested_at) AS oldest FROM movie_detail_queue"),
+
+  // Подборки (см. collections/collection_movies выше и
+  // importKinopoiskCollection ниже).
+  collectionBySlug: db.prepare("SELECT * FROM collections WHERE slug = ?"),
+  collectionById: db.prepare("SELECT * FROM collections WHERE id = ?"),
+  collectionUpsert: db.prepare(`
+    INSERT INTO collections (id, slug, name, source, source_slug, cover_url, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?)
+    ON CONFLICT(slug) DO UPDATE SET
+      name = excluded.name, source = excluded.source, source_slug = excluded.source_slug,
+      cover_url = excluded.cover_url, updated_at = excluded.updated_at`),
+  collectionMoviesDeleteAll: db.prepare("DELETE FROM collection_movies WHERE collection_id = ?"),
+  collectionMovieInsert: db.prepare("INSERT INTO collection_movies (collection_id, kinopoisk_id, position) VALUES (?,?,?)"),
+  collectionDelete: db.prepare("DELETE FROM collections WHERE id = ?"), // collection_movies уходит каскадом (FK ON DELETE CASCADE)
+  // movies_count — подзапросом, не JOIN+GROUP BY: подборок мало, и так проще.
+  collectionsList: db.prepare(`
+    SELECT c.*, (SELECT COUNT(*) FROM collection_movies cm WHERE cm.collection_id = c.id) AS movies_count
+      FROM collections c ORDER BY c.updated_at DESC`),
 
   // Скан библиотеки (см. library_scan выше и drainLibraryScan ниже).
   libraryScanGet: db.prepare("SELECT * FROM library_scan WHERE id = 1"),
@@ -1537,6 +1586,69 @@ function ensureMovieShallow(item) {
   return stmt.movieByKpId.get(item.kinopoiskId);
 }
 
+/** Импорт подборки Кинопоиска целиком (см. POST /internal/collections/import
+    — только через Admin, checkAdminKey) — заводит/обновляет строку в
+    collections + весь набор collection_movies. Список фильмов собираем
+    СИНХРОННО, постранично (курсор v1.5/list/{slug}) — это дёшево: лимит
+    страницы можно поднять до 250, топ-250 весь целиком влезает в ОДИН
+    вызов, топ-1000 — в четыре. Жёсткого потолка на число страниц нет —
+    сами подборки Кинопоиска конечны, а вот квота на её сбор вполне может
+    кончиться посреди дела: если это случилось НЕ на первой странице (то
+    есть slug точно существовал и что-то уже собрано), сохраняем то, что
+    успели, вместо того чтобы терять всё разом — result.partial:true тогда
+    сигналит, что список неполный (см. return ниже), можно перезапустить
+    импорт позже, когда квота освободится, той же ручкой. Если сорвалось на
+    самой первой странице (items ещё пуст — неверный slug, сеть легла и
+    т.п.) — сохранять нечего, ошибка идёт наверх как раньше.
+    Полные детали (жанры/актёры/постер) каждого фильма — НЕ синхронно:
+    ensureMovieShallow заводит базовую строку сразу (без сети), а докачку
+    docs откладываем в movie_detail_queue (см. drainMovieDetailQueue) —
+    синхронно тянуть детали у всех фильмов разом было бы самоубийством для
+    суточной квоты на один HTTP-запрос.
+    Повторный импорт того же slug — не докат, а полная пересборка набора
+    (DELETE + INSERT): состав/порядок у Кинопоиска мог измениться, «дописать
+    недостающее» тут смысла не имеет. id коллекции переиспользуем, если slug
+    уже был — иначе PATCH/DELETE на неё из админки указывали бы на исчезнувший id. */
+async function importKinopoiskCollection(sourceSlug) {
+  let name = null, coverUrl = null;
+  const items = [];
+  let next;
+  let partial = false;
+  do {
+    let data;
+    try {
+      data = await poiskkino.getCollection(sourceSlug, { limit: 250, next });
+    } catch (e) {
+      if (items.length === 0) throw e; // нечего сохранять — прежнее поведение
+      partial = true;
+      break;
+    }
+    if (name === null) { name = data.name; coverUrl = data.cover?.url || data.cover?.previewUrl || null; }
+    const docs = Array.isArray(data.movies?.docs) ? data.movies.docs : [];
+    items.push(...docs);
+    next = data.movies?.hasNext ? data.movies.next : null;
+  } while (next);
+
+  const existing = stmt.collectionBySlug.get(sourceSlug);
+  const id = existing ? existing.id : uid();
+  const ts = now();
+  stmt.collectionUpsert.run(id, sourceSlug, name, "kinopoisk", sourceSlug, coverUrl, existing ? existing.created_at : ts, ts);
+  stmt.collectionMoviesDeleteAll.run(id);
+
+  let queued = 0, alreadyCached = 0, position = 0;
+  for (const item of items) {
+    position++;
+    const mv = mapMovie(item.movie);
+    stmt.collectionMovieInsert.run(id, mv.kinopoiskId, position);
+    const existingMovie = stmt.movieByKpId.get(mv.kinopoiskId);
+    if (existingMovie && existingMovie.detail_cached_at) { alreadyCached++; continue; }
+    if (!existingMovie) ensureMovieShallow({ kinopoiskId: mv.kinopoiskId, title: mv.title, year: mv.year, posterUrl: mv.posterUrl });
+    stmt.movieDetailQueueInsert.run(mv.kinopoiskId, ts);
+    queued++;
+  }
+  return { id, slug: sourceSlug, name, coverUrl, moviesCount: items.length, alreadyCached, queued, partial };
+}
+
 /** IMDb-запись (imdb_id известен, kinopoisk_id — нет) → фильм в movies, в
     таком порядке (без сети, если получится): (1) уже закэширован по этому
     imdb_id (кто-то другой уже привёл его через poiskkino.dev — там imdb_id
@@ -1741,11 +1853,21 @@ async function drainImportQueue(batchSize = 20) {
   }
 }
 
+// Тот же защитный потолок, что и у скана библиотеки (LIBRARY_SCAN_MAX_PER_CALL)
+// — не рабочий лимит, а страховка от патологически огромной очереди
+// (сотни тысяч id за раз реалистично не бывает, но на случай бага где-то
+// ещё). Раньше тут стоял batchSize=20 — тот же промах, что чинили у
+// library-scan: реальный тормоз и так квота, а с фиксированной двадцаткой
+// импорт подборки в 1000 фильмов докачивал бы детали часов 12 (20 фильмов
+// на 15-минутный тик), даже если квота свободна почти целиком.
+const MOVIE_DETAIL_QUEUE_MAX_PER_CALL = 5000;
+
 /** Догоняет movie_detail_queue — тем же приёмом и тем же тиком, что и
     drainImportQueue выше, но проще: kinopoisk_id уже настоящий (расширение
-    его само знает, см. POST /api/import/movie), никакого поиска по
-    title/year тут не нужно — просто ensureMovieCached каждого id по
-    очереди, пока хватает импортной квоты.
+    его само знает, см. POST /api/import/movie, или импорт подборки —
+    importKinopoiskCollection), никакого поиска по title/year тут не нужно —
+    просто ensureMovieCached каждого id по очереди, непрерывно, пока хватает
+    импортной квоты (см. MOVIE_DETAIL_QUEUE_MAX_PER_CALL выше).
 
     Логи — та же дилемма, что решали у library-scan («ощущение, что всё
     зависло»): очередь тикает раз в 15 минут и до этой правки не писала в
@@ -1755,39 +1877,54 @@ async function drainImportQueue(batchSize = 20) {
     ПОДТВЕРЖДАЕМ, что механизм жив — либо докатили партию, либо честно ждём
     квоту (и только если реально есть что докатывать — на пустой очереди
     без квоты писать нечего и незачем). */
-async function drainMovieDetailQueue(batchSize = 20) {
-  if (!poiskkino.enabled) return;
-  if (!importQuotaAvailable()) {
-    const pending = stmt.movieDetailQueueStats.get().n;
-    if (pending > 0) adminLog.info("Очередь деталей: ждёт квоту", { pending, quota: `${poiskkino.usageToday()}/${IMPORT_DAILY_CAP}` });
-    return;
-  }
-  const batch = stmt.movieDetailQueueBatch.all(batchSize);
-  if (!batch.length) return;
-  let added = 0, errors = 0;
-  for (const row of batch) {
-    if (!importQuotaAvailable()) break;
-    try {
-      await ensureMovieCached(row.kinopoisk_id);
-      stmt.movieDetailQueueDelete.run(row.kinopoisk_id);
-      added++;
-    } catch (e) {
-      errors++;
-      stmt.movieDetailQueueBumpAttempts.run(row.kinopoisk_id);
-      // Тот же порог, что у import_queue — реальный id, поэтому 404 тут
-      // маловероятен (разве что фильм с тех пор удалили из библиотеки, см.
-      // DELETE /internal/movies/:id), но сеть подводит и без этого; сдаёмся
-      // после пяти попыток, а не висим в очереди вечно. Фильм остаётся с
-      // базовыми полями — не удаляем и не откатываем, просто прекращаем
-      // пытаться доукомплектовать.
-      if (row.attempts + 1 >= 5) {
+// Мьютекс — та же причина, что и у libraryScanBusy (см. библиотечный скан
+// ниже): с тех пор как появился немедленный fire-and-forget запуск после
+// импорта подборки (см. POST /internal/collections/import), этот вызов
+// может пересечься с периодическим тиком или с другим импортом — оба
+// прочитали бы один и тот же батч ДО того, как первый успеет что-то
+// удалить, и задвоили бы сетевые походы (не данные — ensureMovieCached
+// идемпотентен, но квоту тратили бы впустую).
+let movieDetailQueueBusy = false;
+
+async function drainMovieDetailQueue(batchSize = MOVIE_DETAIL_QUEUE_MAX_PER_CALL) {
+  if (movieDetailQueueBusy) return;
+  movieDetailQueueBusy = true;
+  try {
+    if (!poiskkino.enabled) return;
+    if (!importQuotaAvailable()) {
+      const pending = stmt.movieDetailQueueStats.get().n;
+      if (pending > 0) adminLog.info("Очередь деталей: ждёт квоту", { pending, quota: `${poiskkino.usageToday()}/${IMPORT_DAILY_CAP}` });
+      return;
+    }
+    const batch = stmt.movieDetailQueueBatch.all(batchSize);
+    if (!batch.length) return;
+    let added = 0, errors = 0;
+    for (const row of batch) {
+      if (!importQuotaAvailable()) break;
+      try {
+        await ensureMovieCached(row.kinopoisk_id);
         stmt.movieDetailQueueDelete.run(row.kinopoisk_id);
-        adminLog.warn("Очередь деталей: сдался после 5 попыток", { kinopoiskId: row.kinopoisk_id, message: e.message });
+        added++;
+      } catch (e) {
+        errors++;
+        stmt.movieDetailQueueBumpAttempts.run(row.kinopoisk_id);
+        // Тот же порог, что у import_queue — реальный id, поэтому 404 тут
+        // маловероятен (разве что фильм с тех пор удалили из библиотеки, см.
+        // DELETE /internal/movies/:id), но сеть подводит и без этого; сдаёмся
+        // после пяти попыток, а не висим в очереди вечно. Фильм остаётся с
+        // базовыми полями — не удаляем и не откатываем, просто прекращаем
+        // пытаться доукомплектовать.
+        if (row.attempts + 1 >= 5) {
+          stmt.movieDetailQueueDelete.run(row.kinopoisk_id);
+          adminLog.warn("Очередь деталей: сдался после 5 попыток", { kinopoiskId: row.kinopoisk_id, message: e.message });
+        }
       }
     }
+    const remaining = stmt.movieDetailQueueStats.get().n;
+    adminLog.info("Очередь деталей: докатил партию", { added, errors, remaining });
+  } finally {
+    movieDetailQueueBusy = false;
   }
-  const remaining = stmt.movieDetailQueueStats.get().n;
-  adminLog.info("Очередь деталей: докатил партию", { added, errors, remaining });
 }
 
 // Второй одновременный вызов (двойной клик «Запустить», периодический тик
@@ -2826,6 +2963,57 @@ const server = http.createServer(async (req, res) => {
     if (p === "/internal/poiskkino/keys" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
       return json(res, 200, { enabled: poiskkino.enabled, keys: poiskkino.enabled ? poiskkino.keysStatus() : [] });
+    }
+
+    // Подборки, которые мы завели у себя (см. collections/collection_movies
+    // выше) — только через Admin. POST .../import тянет подборку с
+    // Кинопоиска целиком (см. importKinopoiskCollection — список синхронно,
+    // детали фильмов фоном через movie_detail_queue). GET — список уже
+    // заведённых, DELETE/:id — убрать (сами фильмы из movies/
+    // movie_detail_queue не трогает, только саму группировку).
+    if (p === "/internal/collections" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const rows = stmt.collectionsList.all();
+      return json(res, 200, {
+        collections: rows.map(r => ({
+          id: r.id, slug: r.slug, name: r.name, source: r.source, sourceSlug: r.source_slug,
+          coverUrl: r.cover_url, moviesCount: r.movies_count, updatedAt: r.updated_at,
+        })),
+      });
+    }
+    if (p === "/internal/collections/import" && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const body = await readJson(req);
+      const slug = str(body.slug, 100);
+      if (!slug) return json(res, 400, { error: "bad slug", message: "Укажите slug подборки Кинопоиска." });
+      let result;
+      try {
+        result = await importKinopoiskCollection(slug);
+      } catch (e) {
+        return poiskkinoError(res, e, {
+          notFound: "Подборка с таким адресом не найдена.",
+          badRequest: "poiskkino.dev не принял запрос — проверьте адрес подборки.",
+        });
+      }
+      adminLog[result.partial ? "warn" : "info"](
+        result.partial ? "Подборка импортирована частично (не хватило квоты)" : "Подборка импортирована",
+        { slug, name: result.name, moviesCount: result.moviesCount, queued: result.queued, partial: result.partial }
+      );
+      // Не await — ответ админу уходит сразу; докачку деталей запускаем
+      // фоном тут же, а не ждём ближайший 15-минутный тик (тот же приём,
+      // что и у POST /internal/library/scan) — крупная подборка иначе
+      // выглядела бы «зависшей» до следующего тика, хотя работать уже можно.
+      if (result.queued > 0) drainMovieDetailQueue().catch(e => adminLog.error("Очередь деталей: сбой батча", { message: e.message }));
+      return json(res, 200, result);
+    }
+    const collectionDeleteMatch = p.match(/^\/internal\/collections\/([\w-]+)$/);
+    if (collectionDeleteMatch && req.method === "DELETE") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const row = stmt.collectionById.get(collectionDeleteMatch[1]);
+      if (!row) return json(res, 404, { error: "not found" });
+      stmt.collectionDelete.run(row.id);
+      adminLog.info("Подборка удалена из библиотеки", { slug: row.slug, name: row.name });
+      return json(res, 200, { ok: true });
     }
 
     // Адрес auth отдаём фронту, чтобы он не был зашит в статику.
