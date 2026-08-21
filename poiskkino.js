@@ -54,6 +54,14 @@ module.exports = function createPoiskKino(options = {}) {
     bump: db.prepare(`
       INSERT INTO poiskkino_key_usage (day, key_idx, calls) VALUES (?, ?, 1)
       ON CONFLICT(day, key_idx) DO UPDATE SET calls = calls + 1`),
+    // Провайдер сам сказал 403 «суточный лимит исчерпан» — наш dailyCap это
+    // ОЦЕНКА (обычно 190), не число от самого poiskkino.dev, реальный тариф
+    // конкретного ключа может оказаться ниже. MAX(calls, excluded.calls), не
+    // просто SET — если calls уже больше dailyCap (несколько параллельных
+    // запросов успели сюда одновременно), не занижаем счётчик обратно.
+    markExhausted: db.prepare(`
+      INSERT INTO poiskkino_key_usage (day, key_idx, calls) VALUES (?, ?, ?)
+      ON CONFLICT(day, key_idx) DO UPDATE SET calls = MAX(calls, excluded.calls)`),
   };
 
   const utcDay = (ts) => new Date(ts).toISOString().slice(0, 10); // YYYY-MM-DD, UTC
@@ -88,32 +96,80 @@ module.exports = function createPoiskKino(options = {}) {
     return -1;
   }
 
-  /** Единственное место, откуда уходят HTTP-запросы к provider'у. */
+  function quotaError() {
+    const err = new Error(
+      `Дневной лимит обращений к poiskkino.dev исчерпан${apiKeys.length > 1 ? ` по всем ${apiKeys.length} ключам` : ""} ` +
+      `(${dailyCap}/сутки на ключ, UTC). ` +
+      `Уже добавленные фильмы продолжают работать — новый поиск и добавление станут доступны завтра.`
+    );
+    err.quota = true;
+    return err;
+  }
+
+  /** Единственное место, откуда уходят HTTP-запросы к provider'у.
+      dailyCap (обычно 190) — НАША оценка лимита ключа, не число, которое
+      реально гарантирует провайдер: настоящий тариф может оказаться ниже
+      (или у части ключей отличаться от других). Раньше это значило, что
+      pickKey() продолжал считать ключ рабочим (calls < dailyCap), запрос
+      уходил, а provider отвечал 403 «суточный лимит исчерпан» — и это летело
+      наверх голой ошибкой, ключ не переключался, хотя другие ключи рядом
+      могли быть совершенно свободны. Теперь 403 от provider'а — сигнал
+      «этот ключ исчерпан ПРЯМО СЕЙЧАС, независимо от того, что говорит наш
+      счётчик»: помечаем его достигшим dailyCap и пробуем следующий ключ по
+      кругу (pickKey уже пропустит помеченный), а не молча повторяем на нём
+      же. Обычный `!res.ok` для остальных кодов (404/400/5xx) — как раньше,
+      сразу наружу, это не про квоту. */
   async function call(pathAndQuery) {
     if (!enabled) {
       const err = new Error("Поиск фильмов не настроен: не задан POISKKINO_API_KEY.");
       err.notConfigured = true;
       throw err;
     }
-    const idx = pickKey();
-    if (idx === -1) {
-      const err = new Error(
-        `Дневной лимит обращений к poiskkino.dev исчерпан${apiKeys.length > 1 ? ` по всем ${apiKeys.length} ключам` : ""} ` +
-        `(${dailyCap}/сутки на ключ, UTC). ` +
-        `Уже добавленные фильмы продолжают работать — новый поиск и добавление станут доступны завтра.`
-      );
-      err.quota = true;
-      throw err;
-    }
-    // Считаем обращение сразу, до ожидания ответа: сетевой запрос уже ушёл и
-    // потратил слот у провайдера независимо от того, что он нам ответит.
-    // Между этой строкой и следующим await ничего больше не выполняется —
-    // JS однопоточный, гонки внутри процесса тут нет.
-    stmt.bump.run(utcDay(Date.now()), idx);
+    let idx = pickKey();
+    if (idx === -1) throw quotaError();
 
+    while (idx !== -1) {
+      // Считаем обращение сразу, до ожидания ответа: сетевой запрос уже ушёл
+      // и потратил слот у провайдера независимо от того, что он нам ответит.
+      stmt.bump.run(utcDay(Date.now()), idx);
+
+      let res;
+      try {
+        res = await fetch(API_BASE + pathAndQuery, { headers: { "X-API-KEY": apiKeys[idx] } });
+      } catch (e) {
+        throw new Error(`poiskkino.dev недоступен: ${e.message}`);
+      }
+
+      if (res.status === 403) {
+        stmt.markExhausted.run(utcDay(Date.now()), idx, dailyCap);
+        idx = pickKey();
+        continue;
+      }
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        const err = new Error(`poiskkino.dev ответил ${res.status}${body ? ": " + body.slice(0, 200) : ""}`);
+        err.status = res.status;
+        throw err;
+      }
+      return res.json();
+    }
+    // 403 добил и этот ключ, и все следующие по кругу — реально нечем.
+    throw quotaError();
+  }
+
+  /** Живой опрос суточного лимита У САМОГО ПРОВАЙДЕРА (GET /v1.5/token) для
+      ОДНОГО конкретного ключа — не через pickKey()/call(), это диагностика
+      именно этого idx, не рабочий запрос. В отличие от keysStatus() (наш
+      локальный счётчик + dailyCap-ОЦЕНКА, которая, как выяснилось, может не
+      совпадать с реальным тарифом ключа — см. call() выше) тут настоящие
+      числа от poiskkino.dev: requestsLimit/requestsUsed/requestsRemaining,
+      ttl/resetAt. Запрос НЕ тратит лимит (сказано в документации
+      /v1.5/token) — можно звать сколько угодно, специально для админки. */
+  async function getTokenInfo(idx) {
+    if (!(idx >= 0 && idx < apiKeys.length)) throw new Error("poiskkino: неверный индекс ключа");
     let res;
     try {
-      res = await fetch(API_BASE + pathAndQuery, { headers: { "X-API-KEY": apiKeys[idx] } });
+      res = await fetch(`${API_BASE}/v1.5/token`, { headers: { "X-API-KEY": apiKeys[idx] } });
     } catch (e) {
       throw new Error(`poiskkino.dev недоступен: ${e.message}`);
     }
@@ -126,6 +182,23 @@ module.exports = function createPoiskKino(options = {}) {
     return res.json();
   }
 
+  /** getTokenInfo для ВСЕХ ключей разом (параллельно — независимые запросы,
+      один упавший не должен ронять остальные), для /internal/poiskkino/keys.
+      Формат под тот же keysStatus() (index + локальные calls/cap), плюс
+      live — реальные числа провайдера, либо liveError, если конкретно этот
+      ключ не ответил (невалиден/провайдер недоступен). */
+  async function keysLiveStatus() {
+    const local = keysStatus();
+    const live = await Promise.all(apiKeys.map((_key, idx) =>
+      getTokenInfo(idx).then(info => ({ info })).catch(e => ({ error: e.message }))
+    ));
+    return local.map((row, idx) => ({
+      ...row,
+      live: live[idx].info || null,
+      liveError: live[idx].error || null,
+    }));
+  }
+
   return {
     enabled,
     usageToday,
@@ -135,6 +208,7 @@ module.exports = function createPoiskKino(options = {}) {
     totalDailyCap: dailyCap * apiKeys.length,
     keyCount: apiKeys.length,
     keysStatus,
+    keysLiveStatus,
     search: (q) => call(`/v1.4/movie/search?query=${encodeURIComponent(q)}&limit=10`),
     getById: (id) => call(`/v1.4/movie/${encodeURIComponent(id)}`),
     // Коллекции кино (топ-250 и т.п.) — только на v1.4/v1.5 у provider'а вообще

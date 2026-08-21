@@ -2978,9 +2978,13 @@ const server = http.createServer(async (req, res) => {
     // Расход квоты по каждому ключу poiskkino.dev отдельно (см. poiskkino.js
     // — несколько ключей через запятую в POISKKINO_API_KEY, автопереключение
     // при исчерпании) — только видимость, без самих значений ключей.
+    // keysLiveStatus (не keysStatus) — рядом с нашей локальной оценкой сразу
+    // настоящие цифры от provider'а (GET /v1.5/token, лимит не тратит): наш
+    // dailyCap может не совпадать с реальным тарифом ключа (см. call() в
+    // poiskkino.js), поэтому только локальный счётчик вводил в заблуждение.
     if (p === "/internal/poiskkino/keys" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
-      return json(res, 200, { enabled: poiskkino.enabled, keys: poiskkino.enabled ? poiskkino.keysStatus() : [] });
+      return json(res, 200, { enabled: poiskkino.enabled, keys: poiskkino.enabled ? await poiskkino.keysLiveStatus() : [] });
     }
 
     // Подборки, которые мы завели у себя (см. collections/collection_movies
