@@ -1037,6 +1037,7 @@ function renderMovieInfoModal(mv, rooms, onChange, friendsMarks) {
       <div class="title">${esc(mv.title)}${esc(year)}</div>
       <div class="chip-row">${movieChipsHtml(mv)}</div>
     </div>
+    <div class="movie-info-kpid muted">ID Кинопоиска: <button type="button" class="pager-page-num" id="movieInfoKpIdBtn">${esc(mv.kinopoiskId)}</button></div>
     <div class="movie-info-rating">
       <span class="muted">Ваша оценка</span>
       <div data-act="myRating"></div>
@@ -1079,6 +1080,7 @@ function renderMovieInfoModal(mv, rooms, onChange, friendsMarks) {
   body.querySelector("#movieInfoWatchBtn").onclick = () => window.open(kinopoiskCxUrl(mv.kinopoiskId), "_blank", "noopener");
   body.querySelector("#movieInfoKpBtn").onclick = () => window.open(kinopoiskRuUrl(mv.kinopoiskId), "_blank", "noopener");
   $("movieInfoShareBtn").onclick = () => copyShareLink(mv.kinopoiskId);
+  body.querySelector("#movieInfoKpIdBtn").onclick = () => copyKinopoiskId(mv.kinopoiskId);
   // Кнопки может не быть — friendsMarksHtml рисует её, только если друзей
   // больше FRIENDS_MARKS_INLINE_LIMIT (см. там).
   const moreFriendsBtn = body.querySelector('[data-act="friendsMarksMoreBtn"]');
@@ -1094,6 +1096,13 @@ function renderMovieInfoModal(mv, rooms, onChange, friendsMarks) {
 function copyShareLink(kinopoiskId) {
   const url = `${location.origin}${location.pathname}#/movie/${kinopoiskId}`;
   act(async () => { await navigator.clipboard.writeText(url); }, "Ссылка скопирована");
+}
+
+/** Копирует голый kinopoisk_id (не ссылку — тот же id, что виден в
+    .movie-info-kpid, пригождается для admin-задач вроде импорта подборок).
+    Тот же act()-паттерн, что и у copyShareLink выше. */
+function copyKinopoiskId(kinopoiskId) {
+  act(async () => { await navigator.clipboard.writeText(String(kinopoiskId)); }, "ID скопирован");
 }
 
 /** Открывает модалку «Фильм» для ЛЮБОЙ карточки по всему сервису — очередь/

@@ -550,6 +550,19 @@ select{
 input.pager-page-num-input{
   width:3.2rem; flex:none; text-align:center; padding:1px 4px; font:inherit; font-weight:600;
 }
+/* На узком экране 1fr 1fr слева/справа (нужны десктопу, чтобы подпись была
+   РОВНО по центру) отжимают друг у друга место у подписи-«Стр. N из M» — той
+   не хватает миллиметров, «Вперёд →» с «»» переносятся на вторую строку
+   ВНУТРИ своей колонки, а align-items:center у .pager-nav из-за этого
+   визуально роняет всё остальное (короче ростом) в середину — рядок
+   разъезжается, «Вперёд →» повисает сверху отдельно. auto вместо 1fr отдаёт
+   каждой группе кнопок ровно её ширину, не больше — подписи хватает
+   оставшегося места, перенос пропадает. Центровка от этого чуть слабее
+   (группы кнопок редко идеально равны по ширине), но на глаз разница в
+   единицы пикселей не видна, а строка не расползается. */
+@media(max-width:30rem){
+  .pager-nav{grid-template-columns:auto 1fr auto}
+}
 
 /* Компактная плитка витрины — постер (с меню «Добавить в…» бейджем поверх
    обложки) и строка название/год + «Смотреть» (см. renderMovieTile в app.js).
@@ -643,6 +656,7 @@ input.pager-page-num-input{
 .movie-info-caption{display:flex;justify-content:space-between;align-items:flex-start;gap:.8rem;margin-top:.8rem}
 .movie-info-caption .title{font-weight:650;font-size:16px}
 .movie-info-caption .chip-row{justify-content:flex-end;margin-top:0}
+.movie-info-kpid{margin-top:.3rem}
 /* «Ваша оценка» в модалке «Фильм» — обычная шкала из 10 звёзд
    (renderStarRating), та же самая, что и в маленьком окошке «Оценка»
    (renderRatingBadge/openRateModal) для компактной карточки — тут просто
