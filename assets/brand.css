@@ -192,6 +192,34 @@
   79%    { transform:scale(2.3); opacity:0 }
   100%   { transform:scale(.6); opacity:0 }
 }
+/* пазлы: искра блуждает вбок, как будто ищет своё место, затем резко
+   «щёлкает» на позицию (overshoot-масштаб + вспышка) и дальше идёт ровно
+   вверх, уже без блужданий — деталь нашла пару и присоединилась к общей
+   картинке. Кольцо на ::after квадратное, не круглое, как у остальных
+   поводок, — единственный явный намёк на форму детали пазла в самом фоне. */
+.bh-sparks--interlock .bh-spark{
+  animation-name:bh-interlock;
+  animation-timing-function:cubic-bezier(.34,1.56,.64,1);
+}
+@keyframes bh-interlock{
+  0%  { transform:translate3d(0,0,0) scale(.5); opacity:0 }
+  10% { opacity:.75 }
+  45% { transform:translate3d(var(--bh-drift,1.5rem), -22vh, 0) scale(.55); opacity:.6 }
+  52% { transform:translate3d(var(--bh-drift,1.5rem), -25vh, 0) scale(1.15); opacity:1 }
+  58% { transform:translate3d(var(--bh-drift,1.5rem), -27vh, 0) scale(.85); opacity:.9 }
+  100%{ transform:translate3d(var(--bh-drift,1.5rem), -60vh, 0) scale(.6); opacity:0 }
+}
+.bh-sparks--interlock .bh-spark::after{
+  content:""; position:absolute; inset:-5px; border-radius:2px;
+  border:1px solid var(--flame-tip);
+  opacity:0; animation:bh-interlock-click var(--bh-dur,12s) linear var(--bh-delay,0s) infinite;
+}
+@keyframes bh-interlock-click{
+  0%,48%{ transform:scale(.4) rotate(0deg); opacity:0 }
+  52%   { transform:scale(1) rotate(6deg); opacity:.7 }
+  60%   { transform:scale(1.6) rotate(6deg); opacity:0 }
+  100%  { opacity:0 }
+}
 
 /* ═══ ЗНАК ═══
    Градиент объявляется ВНУТРИ каждого <svg>: вынесенный наружу не увидит

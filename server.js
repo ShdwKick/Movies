@@ -3026,6 +3026,13 @@ const server = http.createServer(async (req, res) => {
       try {
         result = await importKinopoiskCollection(slug);
       } catch (e) {
+        // poiskkinoError() отдаёт админу нарочно общее сообщение (детали
+        // upstream-ответа — не для чужих глаз), а console.error пишет
+        // только в сырой stdout процесса, который админка не показывает —
+        // без этой строки причина сбоя нигде, кроме как через SSH, не
+        // видна. adminLog.error — тот же журнал, что и «Подборка
+        // импортирована» ниже, просто на неудачный путь.
+        adminLog.error("Подборка: импорт упал", { slug, message: e.message, status: e.status || null });
         return poiskkinoError(res, e, {
           notFound: "Подборка с таким адресом не найдена.",
           badRequest: "poiskkino.dev не принял запрос — проверьте адрес подборки.",
