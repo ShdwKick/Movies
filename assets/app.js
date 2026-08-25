@@ -354,20 +354,22 @@ async function refreshShowcase(rooms) {
   // посетитель тогда вообще не догадывался, что такая возможность есть.
   // Друзья — видны любому авторизованному, даже без активности друзей
   // (renderFriendsActivity тогда предлагает позвать), но не анониму — личная
-  // вкладка, дальше там нечего показывать без входа. Подборки — живой запрос
-  // к poiskkino.dev (не наш кэш, тратит общую суточную квоту, см.
-  // /api/collections в server.js), поэтому, как и /search в шапке, только
-  // вошедшим — анониму вкладка не показывается вовсе, а не гейтится
-  // изнутри, как рекомендации (там смысл показать анониму есть — «вот что
-  // будет после входа», здесь нет: список подборок один и тот же для всех,
-  // рекламировать нечего). Саму витрину подборок (какие есть) НЕ грузим тут
-  // же вместе с genres/reco/friends — только по клику на вкладку
-  // (renderCollectionsGallery ниже): в отличие от них это живой запрос, и
-  // тратить квоту на каждый заход на главную ради видимости кнопки не стоит.
+  // вкладка, дальше там нечего показывать без входа. Подборки — теперь свой
+  // кэш (см. /api/collections в server.js — раньше был живой запрос к
+  // poiskkino.dev, тратил квоту), но список всё равно одинаков для всех,
+  // рекламировать анониму нечего — вкладка скрыта, как и «Друзья», а не
+  // гейтится изнутри, как рекомендации (там смысл показать анониму есть —
+  // «вот что будет после входа»). Саму витрину подборок (какие есть) НЕ
+  // грузим тут же вместе с genres/reco/friends — только по клику на вкладку
+  // (renderCollectionsGallery ниже), тем же принципом, что и у остальных.
   const showRecommendations = true;
   const showFriends = authed;
   const showCollections = authed;
-  $("showcaseViewToggle").hidden = !hasGenres && !showRecommendations && !showFriends && !showCollections;
+  // Два переключателя рядом (см. index.html) — «Все фильмы/По жанрам/
+  // Подборки» слева и «Рекомендации/Друзья» справа от него, второй прячется
+  // отдельно от первого: у каждого свой набор причин существовать.
+  $("showcaseViewToggle").hidden = !hasGenres && !showCollections;
+  $("showcaseViewToggleExtra").hidden = !showRecommendations && !showFriends;
   $("showcaseViewGenresBtn").hidden = !hasGenres;
   $("showcaseViewRecommendationsBtn").hidden = !showRecommendations;
   $("showcaseViewFriendsBtn").hidden = !showFriends;
@@ -684,12 +686,13 @@ function friendsActivitySummary(friendMarks) {
   return friendMarks.map(f => f.score != null ? `${f.name} — ${f.score}` : `${f.name} — смотрел(а)`).join(", ");
 }
 
-/** Вкладка «Подборки» — витрина карточек-коллекций Кинопоиска (GET
-    /api/collections, живой запрос к poiskkino.dev — см. обсуждение в
-    refreshShowcase, поэтому запрашивается только тут, по клику на вкладку,
-    а не заранее вместе с genres/reco/friends). Карточка — сама подборка
-    (обложка+название+число фильмов), не фильм; клик уводит на
-    #/collection/:slug (showCollection), где уже настоящие плитки фильмов. */
+/** Вкладка «Подборки» — витрина карточек НАШИХ подборок (GET
+    /api/collections — чтение своего кэша, не живой запрос к poiskkino.dev,
+    поэтому дёшево, но всё равно запрашивается по клику на вкладку, а не
+    заранее вместе с genres/reco/friends — тот же принцип, что и у них).
+    Карточка — сама подборка (обложка+название+число фильмов), не фильм;
+    клик уводит на #/collection/:slug (showCollection), где уже настоящие
+    плитки фильмов. */
 async function renderCollectionsGallery(rooms) {
   const wrap = $("collectionsWrap");
   wrap.hidden = false;
@@ -715,17 +718,15 @@ function renderCollectionCard(c) {
 }
 
 /** Полная страница одной подборки (#/collection/:slug, GET
-    /api/collections/:slug) — курсорная пагинация, так poiskkino.dev отдаёт
-    коллекции («номера страницы» тут нет и быть не может), поэтому вместо
-    пейджера, как у витрины «Из базы» — «Показать ещё», дописывающий
-    следующую порцию в тот же .movie-grid, а не заменяющий её. Фильмы —
-    «тонкие» (те же поля, что у результатов /search: без genres-в-деталях/
-    watched/myScore — сервер их сюда не докладывает, см. комментарий в
-    server.js), поэтому renderAddToMenu тут с withWatched:false, тем же
-    приёмом, что renderSearchResultRow — состояние «просмотрено» отсюда
-    просто неизвестно, показывать пункт меню с неверным состоянием хуже,
-    чем не показывать вовсе; полная карточка (открывается кликом по плитке)
-    его всё равно подгрузит из своего personalList/markSummary. */
+    /api/collections/:slug) — теперь наш собственный кэш, offset-пагинация
+    (limit/offset), та же форма, что у витрины «Из базы» (moviesShowcasePage),
+    просто «Показать ещё» дописывает порцию в тот же .movie-grid, а не
+    заменяет её — так удобнее листать длинную подборку, чем постранично.
+    Фильмы — ПОЛНЫЕ (moviePayload, включая genres/actors/description, когда
+    докачка деталей уже случилась, и watched/myScore текущего пользователя),
+    а не «тонкие», как раньше при живом проксировании к poiskkino.dev —
+    поэтому renderAddToMenu тут уже без withWatched:false, тем же вызовом,
+    что и у обычной витрины. */
 async function showCollection(slug) {
   showOnly("collectionView");
   document.title = "Что смотрим? — подборка";
@@ -734,8 +735,9 @@ async function showCollection(slug) {
   $("collectionMovies").textContent = "";
   $("collectionMoreRow").hidden = true;
 
+  const COLLECTION_PAGE_SIZE = 24;
   const [data, roomsData] = await Promise.all([
-    act(() => api(`/collections/${encodeURIComponent(slug)}`)),
+    act(() => api(`/collections/${encodeURIComponent(slug)}?limit=${COLLECTION_PAGE_SIZE}&offset=0`)),
     act(() => api("/rooms")),
   ]);
   if (!data) { location.hash = "#/"; return; }
@@ -745,16 +747,16 @@ async function showCollection(slug) {
   $("collectionMeta").textContent = data.moviesCount ? `${data.moviesCount} фильмов` : "";
 
   const box = $("collectionMovies");
-  for (const mv of data.movies) box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv, rooms, null, { withWatched: false }) }));
+  for (const mv of data.movies) box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv, rooms) }));
 
-  let next = data.next;
-  $("collectionMoreRow").hidden = !data.hasNext;
+  let offset = data.movies.length;
+  $("collectionMoreRow").hidden = offset >= data.moviesCount;
   $("collectionMoreBtn").onclick = () => act(async () => {
-    const more = await api(`/collections/${encodeURIComponent(slug)}?next=${encodeURIComponent(next)}`);
+    const more = await api(`/collections/${encodeURIComponent(slug)}?limit=${COLLECTION_PAGE_SIZE}&offset=${offset}`);
     if (!more) return;
-    for (const mv of more.movies) box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv, rooms, null, { withWatched: false }) }));
-    next = more.next;
-    $("collectionMoreRow").hidden = !more.hasNext;
+    for (const mv of more.movies) box.append(renderMovieTile(mv, { menu: renderAddToMenu(mv, rooms) }));
+    offset += more.movies.length;
+    $("collectionMoreRow").hidden = offset >= more.moviesCount;
   });
 }
 

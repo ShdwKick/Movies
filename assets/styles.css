@@ -480,15 +480,17 @@ select{
 #showcaseViewToggle{margin-right:auto}
 .showcase-flat-controls{display:flex;align-items:center;gap:.6rem}
 #cachedGenreChip{border:0;cursor:pointer;font:inherit}
-/* На телефоне переключатель (3 кнопки, «Рекомендации» — самая длинная) и
-   сортировка+чип в одну строку с margin-right:auto уже не помещаются —
-   переносим панель на два ряда: переключатель во всю ширину сверху (кнопки
-   делят её поровну, flex:1, как у .room-actions-row), сортировка/чип — под
-   ним, прижаты вправо, как и были. */
+/* На телефоне два переключателя («Все фильмы/По жанрам/Подборки» слева,
+   «Рекомендации/Друзья» справа от него — «Рекомендации» самая длинная
+   кнопка) и сортировка+чип в одну строку уже не помещаются — переносим
+   панель на три ряда: оба переключателя друг под другом во всю ширину
+   (кнопки делят её поровну, flex:1, как у .room-actions-row), сортировка/
+   чип — ниже, прижаты вправо, как и были. */
 @media(max-width:30rem){
   .showcase-toolbar{flex-wrap:wrap}
   #showcaseViewToggle{width:100%;margin-right:0}
-  #showcaseViewToggle button{flex:1;padding:7px 6px;font-size:12px}
+  #showcaseViewToggle button, #showcaseViewToggleExtra button{flex:1;padding:7px 6px;font-size:12px}
+  #showcaseViewToggleExtra{width:100%}
   .showcase-flat-controls{width:100%;justify-content:flex-end}
 }
 

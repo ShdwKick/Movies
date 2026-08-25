@@ -136,24 +136,32 @@
     <div id="homeSearchResults" hidden></div>
   </div>
 
-  <!-- Общая панель над витриной «Из базы» — переключатель вида (общий список/
-       по жанрам/рекомендации, см. refreshShowcase в app.js) слева и
-       сортировка+фильтр общего списка справа, специально ОДНОЙ строкой
-       (просили выровнять переключатель по вертикали с сортировкой). Панель —
-       общий родитель для genreShelvesWrap/cachedMoviesWrap/recommendationsWrap
-       ниже именно поэтому: переключатель должен оставаться на месте
-       независимо от того, какой из трёх видов сейчас показан, а
+  <!-- Общая панель над витриной «Из базы» — ДВА переключателя вида (см.
+       refreshShowcase в app.js): «Все фильмы/По жанрам/Подборки» слева
+       (#showcaseViewToggle) и «Рекомендации/Друзья» рядом с ним, отдельным
+       .mini-seg (#showcaseViewToggleExtra) — разные по природе (первые три
+       листают ОДИН и тот же кэш фильмов с разной выборкой, вторые два —
+       принципиально другие источники данных), но переключают один и тот же
+       showcaseView, поэтому визуально рядом, не в двух ролях под разными
+       заголовками. Сортировка+фильтр общего списка — справа от обоих,
+       специально ОДНОЙ строкой (просили выровнять переключатель по
+       вертикали с сортировкой). Панель — общий родитель для
+       genreShelvesWrap/cachedMoviesWrap/recommendationsWrap/friendsActivityWrap/
+       collectionsWrap ниже именно поэтому: переключатели должны оставаться
+       на месте независимо от того, какой из видов сейчас показан, а
        сортировка/чип относятся только к общему списку — #showcaseFlatControls
-       прячется целиком в видах «По жанрам»/«Рекомендации»
-       (updateShowcaseToolbarVisibility в app.js). Вся панель скрыта, только
-       когда показывать вообще нечего (ни жанров, ни рекомендаций, И кэш пуст). -->
+       прячется целиком во всех остальных видах (updateShowcaseToolbarVisibility
+       в app.js). Вся панель скрыта, только когда показывать вообще нечего
+       (ни жанров, ни подборок, ни рекомендаций, ни друзей, И кэш пуст). -->
   <div class="showcase-toolbar" id="showcaseToolbar" hidden>
     <div class="mini-seg" id="showcaseViewToggle" hidden>
       <button type="button" id="showcaseViewAllBtn">Все фильмы</button>
       <button type="button" id="showcaseViewGenresBtn">По жанрам</button>
+      <button type="button" id="showcaseViewCollectionsBtn">Подборки</button>
+    </div>
+    <div class="mini-seg" id="showcaseViewToggleExtra" hidden>
       <button type="button" id="showcaseViewRecommendationsBtn">Рекомендации</button>
       <button type="button" id="showcaseViewFriendsBtn">Друзья</button>
-      <button type="button" id="showcaseViewCollectionsBtn">Подборки</button>
     </div>
     <div class="showcase-flat-controls" id="showcaseFlatControls">
       <button class="chip" id="cachedGenreChip" type="button" hidden></button>

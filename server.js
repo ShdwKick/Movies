@@ -687,6 +687,10 @@ const stmt = {
   collectionMoviesDeleteAll: db.prepare("DELETE FROM collection_movies WHERE collection_id = ?"),
   collectionMovieInsert: db.prepare("INSERT INTO collection_movies (collection_id, kinopoisk_id, position) VALUES (?,?,?)"),
   collectionDelete: db.prepare("DELETE FROM collections WHERE id = ?"), // collection_movies уходит каскадом (FK ON DELETE CASCADE)
+  // Для GET /api/collections/:slug (публичная страница подборки) — размер,
+  // сами страницы фильмов собирает collectionMoviesPage ниже (там же и
+  // userId для my_score/my_watched, тут просто общее число для пейджера).
+  collectionMoviesCount: db.prepare("SELECT COUNT(*) AS n FROM collection_movies WHERE collection_id = ?"),
   // movies_count — подзапросом, не JOIN+GROUP BY: подборок мало, и так проще.
   collectionsList: db.prepare(`
     SELECT c.*, (SELECT COUNT(*) FROM collection_movies cm WHERE cm.collection_id = c.id) AS movies_count
@@ -978,6 +982,30 @@ function moviesShowcasePage(limit, offset, sort, userId, genre) {
      LIMIT ? OFFSET ?
   `).all(...params);
   return rows;
+}
+
+/** Страница фильмов подборки (см. GET /api/collections/:slug) — та же форма
+    строки, что и moviesShowcasePage выше (avg_score/rating_count/my_score/
+    my_watched через тот же набор подзапросов), просто JOIN через
+    collection_movies и сортировка по её position (порядок Кинопоиска/свой
+    у source='custom'), а не по movies.*. Фильмы — из НАШЕГО кэша (импорт
+    уже развёл коллекцию по movies/movie_detail_queue, см.
+    importKinopoiskCollection), поэтому карточка полная (жанры/актёры/
+    описание, когда докачка деталей уже случилась), не «тонкая», как раньше
+    при живом проксировании к poiskkino.dev. */
+function collectionMoviesPage(collectionId, limit, offset, userId) {
+  return db.prepare(`
+    SELECT movies.*,
+           (SELECT AVG(score) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS avg_score,
+           (SELECT COUNT(*) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS rating_count,
+           (SELECT score FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_score,
+           (SELECT watched FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_watched
+      FROM collection_movies cm
+      JOIN movies ON movies.kinopoisk_id = cm.kinopoisk_id
+     WHERE cm.collection_id = ?
+     ORDER BY cm.position
+     LIMIT ? OFFSET ?
+  `).all(userId, userId, collectionId, limit, offset);
 }
 
 function moviesCountFiltered(genre) {
@@ -2166,57 +2194,40 @@ async function api(req, res, seg, user, query) {
     })) });
   }
 
-  // ── подборки Кинопоиска (poiskkino.dev, «Коллекции кино») — тот же
-  // принцип, что и /search выше: живой запрос к provider'у на каждый вызов
-  // (не наш кэш, тратит общую суточную квоту), поэтому НЕ в
-  // isPublicGetRoute — доступ только по токену, анониму собственно как и
-  // /search недоступен (фронт прячет саму вкладку анониму, см. app.js).
-  // Список фильмов внутри отдаём «тонким» — теми же полями, что и /search:
-  // ensureMovieCached/полную карточку с жанрами-актёрами подгружает уже
-  // сам openMovieInfoModal при клике на конкретный фильм, докешировать
-  // все 250 фильмов топ-250 разом при простом заходе на вкладку было бы
-  // самоубийством для дневной квоты.
+  // ── подборки — НАШИ, уже импортированные (см. collections/
+  // collection_movies выше и importKinopoiskCollection) — раньше тут был
+  // живой запрос к poiskkino.dev (GET /v1.5/list), показывавший вообще ВЕСЬ
+  // каталог Кинопоиска, включая то, что мы никогда не завозили к себе:
+  // «импортировал в админке, а на сайте не появилось» — то, что видит
+  // пользователь, и то, что реально есть в библиотеке, было двумя разными
+  // источниками. Теперь один и тот же: наш collections/collection_movies,
+  // обычное чтение из кэша, без квоты poiskkino.dev — можно (и по-прежнему)
+  // только вошедшим, но исключительно по имеющемуся общему принципу «вкладка
+  // не показывается анониму», не из экономии квоты, как раньше.
   if (seg.length === 2 && seg[1] === "collections") {
     if (m !== "GET") return json(res, 405, { error: "method not allowed" });
-    const category = str(query.get("category"), 50);
-    const next = str(query.get("next"), 1000);
-    let data;
-    try { data = await poiskkino.listCollections({ category, limit: 30, next }); }
-    catch (e) { return poiskkinoError(res, e); }
-    const docs = Array.isArray(data.docs) ? data.docs : [];
+    const rows = stmt.collectionsList.all();
     return json(res, 200, {
-      collections: docs.map(c => ({
-        slug: c.slug, name: c.name, category: c.category,
-        moviesCount: c.moviesCount, coverUrl: c.cover?.url || c.cover?.previewUrl || null,
+      collections: rows.map(r => ({
+        slug: r.slug, name: r.name, moviesCount: r.movies_count, coverUrl: r.cover_url,
       })),
-      next: data.next, hasNext: !!data.hasNext,
     });
   }
   if (seg.length === 3 && seg[1] === "collections") {
     if (m !== "GET") return json(res, 405, { error: "method not allowed" });
     const slug = str(seg[2], 100);
-    const next = str(query.get("next"), 1000);
-    let data;
-    try { data = await poiskkino.getCollection(slug, { limit: 50, next }); }
-    catch (e) {
-      return poiskkinoError(res, e, {
-        notFound: "Подборка с таким адресом не найдена.",
-        badRequest: "poiskkino.dev не принял запрос — проверьте адрес подборки.",
-      });
-    }
-    const items = Array.isArray(data.movies?.docs) ? data.movies.docs : [];
+    const collection = stmt.collectionBySlug.get(slug);
+    if (!collection) return json(res, 404, { error: "not found", message: "Подборка с таким адресом не найдена." });
+    let limit = parseInt(query.get("limit"), 10);
+    if (!Number.isFinite(limit) || limit <= 0) limit = 24;
+    limit = Math.min(limit, 60);
+    let offset = parseInt(query.get("offset"), 10);
+    if (!Number.isFinite(offset) || offset < 0) offset = 0;
+    const rows = collectionMoviesPage(collection.id, limit, offset, user.id);
+    const total = stmt.collectionMoviesCount.get(collection.id).n;
     return json(res, 200, {
-      name: data.name, category: data.category, moviesCount: data.moviesCount,
-      coverUrl: data.cover?.url || data.cover?.previewUrl || null,
-      movies: items.map(item => {
-        const mv = mapMovie(item.movie);
-        return {
-          position: item.position,
-          kinopoiskId: mv.kinopoiskId, title: mv.title, altTitle: mv.altTitle, year: mv.year,
-          posterUrl: mv.posterUrl, kpRating: mv.kpRating, imdbRating: mv.imdbRating, genres: mv.genres,
-        };
-      }),
-      next: data.movies?.next || null, hasNext: !!data.movies?.hasNext,
+      name: collection.name, coverUrl: collection.cover_url, moviesCount: total,
+      movies: rows.map(moviePayload), limit, offset,
     });
   }
 
