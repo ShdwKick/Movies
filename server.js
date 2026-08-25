@@ -1671,10 +1671,15 @@ async function importKinopoiskCollection(sourceSlug) {
       continue;
     }
     imported++;
-    stmt.collectionMovieInsert.run(id, mv.kinopoiskId, imported);
+    // Строка в movies должна существовать ДО insert в collection_movies —
+    // там FK на movies(kinopoisk_id). Раньше insert шёл первым и падал с
+    // «FOREIGN KEY constraint failed» на любом фильме, которого ещё не было
+    // в кэше (то есть почти всегда) — наружу это летело неотличимо от сбоя
+    // poiskkino.dev (см. общий catch в POST /internal/collections/import).
     const existingMovie = stmt.movieByKpId.get(mv.kinopoiskId);
-    if (existingMovie && existingMovie.detail_cached_at) { alreadyCached++; continue; }
     if (!existingMovie) ensureMovieShallow({ kinopoiskId: mv.kinopoiskId, title: mv.title, year: mv.year, posterUrl: mv.posterUrl });
+    stmt.collectionMovieInsert.run(id, mv.kinopoiskId, imported);
+    if (existingMovie && existingMovie.detail_cached_at) { alreadyCached++; continue; }
     stmt.movieDetailQueueInsert.run(mv.kinopoiskId, ts);
     queued++;
   }
