@@ -1695,7 +1695,8 @@ function renderCardMenu(items, opts = {}) {
     строки поиска в том, что комната заранее не известна, поэтому там нет
     вообще никаких кнопок, только клик по строке в модалку, где это меню и
     доступно (см. план задачи «обновим вёрстку на главной»). «В личный
-    список» — сразу выполняет действие (POST /my-list), «Добавить в
+    список»/«Убрать из списка» — тот же toggle, что и у watchedItem, сразу
+    выполняет действие (POST/DELETE /my-list) по mv.inMyList, «Добавить в
     комнату» подменяет содержимое .menu на renderRoomPicker (select комнат +
     кнопка) — сам пикер, без второй кнопки личного списка, она отдельным
     пунктом уровнем выше. Заголовок по умолчанию («Действия с фильмом» —
@@ -1710,12 +1711,14 @@ function renderCardMenu(items, opts = {}) {
     полной перезагрузки экрана. Пункты видны и анониму (карточка/плитка
     фильма — публичные), но каждый начинается с requireAuth() — все три
     действия личные, и без входа делать их некому.
-    Принимает mv целиком (не голый kinopoiskId) — нужен mv.watched, чтобы не
-    предлагать «Отметить просмотренным» для уже просмотренного (баг:
-    повторная отметка была не запрещена, просто бессмысленна). mv.watched
-    есть не у всех источников списков (см. watched-поле в moviePayload на
-    бэке) — там, где его нет (undefined), считаем «не просмотрено», как и
-    раньше. После успешного переключения ПЕРЕСТРАИВАЕМ весь .menu-wrap
+    Принимает mv целиком (не голый kinopoiskId) — нужен mv.watched/mv.inMyList,
+    чтобы не предлагать «Отметить просмотренным»/«В личный список» для уже
+    просмотренного/уже добавленного (баг: повторное действие было не
+    запрещено, просто бессмысленно, а «убрать» было и вовсе недоступно нигде,
+    кроме страницы #/my-list). Оба поля есть не у всех источников списков
+    (см. watched/inMyList в moviePayload на бэке) — там, где их нет
+    (undefined), считаем «нет» по обоим, как и раньше у watched. После
+    успешного переключения ПЕРЕСТРАИВАЕМ весь .menu-wrap
     заново (rerenderMenu, wrap.replaceWith(...)) — просто мутировать
     mv.watched недостаточно: renderCardMenu держит список пунктов меню
     статичным массивом, собранным один раз при первом открытии
@@ -1764,6 +1767,39 @@ function renderAddToMenu(mv, rooms, onChange, opts = {}) {
           }, "Отмечено просмотренным");
         },
       };
+  // Тот же toggle-приём, что и у watchedItem выше — mv.inMyList (см.
+  // moviePayload/markSummary на бэке) решает, какой из двух пунктов
+  // показать. Раньше тут был только «В личный список» без обратного пути —
+  // убрать фильм можно было только на самой странице #/my-list
+  // (renderMyListInto), хотя на него чаще всего натыкаются повторно как раз
+  // на витрине/подборке/в комнате, не там.
+  const myListItem = mv.inMyList
+    ? {
+        label: "Убрать из списка", danger: true,
+        onClick: () => {
+          if (!requireAuth()) return;
+          act(async () => {
+            closeCardMenu();
+            await api(`/my-list/${kinopoiskId}`, { method: "DELETE" });
+            mv.inMyList = false;
+            rerenderMenu();
+            if (onChange) onChange();
+          }, "Убрано из списка");
+        },
+      }
+    : {
+        label: "В личный список",
+        onClick: () => {
+          if (!requireAuth()) return;
+          act(async () => {
+            closeCardMenu();
+            await api("/my-list", { method: "POST", body: { kinopoiskId } });
+            mv.inMyList = true;
+            rerenderMenu();
+            if (onChange) onChange();
+          }, "Добавлено в личный список");
+        },
+      };
   const items = withWatched ? [watchedItem] : [];
   items.push(
     {
@@ -1776,17 +1812,7 @@ function renderAddToMenu(mv, rooms, onChange, opts = {}) {
         });
       },
     },
-    {
-      label: "В личный список",
-      onClick: () => {
-        if (!requireAuth()) return;
-        act(async () => {
-          closeCardMenu();
-          await api("/my-list", { method: "POST", body: { kinopoiskId } });
-          if (onChange) onChange();
-        }, "Добавлено в личный список");
-      },
-    },
+    myListItem,
   );
   wrap = renderCardMenu(items);
   return wrap;

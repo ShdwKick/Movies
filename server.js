@@ -612,6 +612,8 @@ const stmt = {
     INSERT INTO personal_list (user_id, kinopoisk_id, added_at) VALUES (?,?,?)
     ON CONFLICT(user_id, kinopoisk_id) DO NOTHING`),
   personalListDelete: db.prepare("DELETE FROM personal_list WHERE user_id = ? AND kinopoisk_id = ?"),
+  // Для markSummary (очередь/история комнаты) — уже в личном списке или нет.
+  personalListHas: db.prepare("SELECT 1 FROM personal_list WHERE user_id = ? AND kinopoisk_id = ?"),
   // pl_-префикс — тот же приём, что rm_/mm_ у room_movies/movie_marks: не
   // путать с одноимёнными столбцами movies при парсинге строки в moviePayload.
   // avg_score/rating_count/my_score — та же тройка подзапросов, что и у
@@ -802,7 +804,7 @@ function roomPayload(room, me, userId) {
         // полем» по каждому экрану отдельно. mark оставлен как есть — им всё
         // ещё пользуется renderHistoryCard (watched-флаг конкретной комнаты
         // тут ни при чём, это ГЛОБАЛЬНАЯ пометка).
-        movie: { ...moviePayload(r), avgScore: mark.avgScore, ratingCount: mark.ratingCount, myScore: mark.myScore },
+        movie: { ...moviePayload(r), avgScore: mark.avgScore, ratingCount: mark.ratingCount, myScore: mark.myScore, inMyList: mark.inMyList },
         mark,
       };
     }),
@@ -931,6 +933,13 @@ function moviePayload(row) {
     // видит вовсе. Нужно фронту, чтобы не предлагать «Отметить
     // просмотренным» для уже просмотренного (см. renderAddToMenu в app.js).
     watched: row.my_watched !== undefined ? !!row.my_watched : undefined,
+    // Тот же приём — в личном списке фильм уже или нет (personal_list),
+    // нужно фронту, чтобы предлагать «Убрать из списка» вместо повторного
+    // «В личный список» (см. renderAddToMenu в app.js) — раньше такого
+    // поля не было вовсе, и убрать фильм из списка можно было только на
+    // самой странице #/my-list (renderMyListInto), а не там, где обычно на
+    // него и натыкаются повторно (витрина/подборка/комната).
+    inMyList: row.in_my_list !== undefined ? !!row.in_my_list : undefined,
   };
 }
 
@@ -969,13 +978,14 @@ const MOVIES_SORT_ORDER = {
 function moviesShowcasePage(limit, offset, sort, userId, genre) {
   const orderBy = MOVIES_SORT_ORDER[sort] || MOVIES_SORT_ORDER.recent;
   const genreFilter = genre ? "AND EXISTS (SELECT 1 FROM json_each(movies.genres) je WHERE je.value = ?)" : "";
-  const params = genre ? [userId, userId, genre, limit, offset] : [userId, userId, limit, offset];
+  const params = genre ? [userId, userId, userId, genre, limit, offset] : [userId, userId, userId, limit, offset];
   const rows = db.prepare(`
     SELECT movies.*,
            (SELECT AVG(score) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS avg_score,
            (SELECT COUNT(*) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS rating_count,
            (SELECT score FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_score,
-           (SELECT watched FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_watched
+           (SELECT watched FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_watched,
+           (SELECT 1 FROM personal_list x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS in_my_list
       FROM movies
      WHERE 1=1 ${genreFilter}
      ORDER BY ${orderBy}
@@ -986,7 +996,7 @@ function moviesShowcasePage(limit, offset, sort, userId, genre) {
 
 /** Страница фильмов подборки (см. GET /api/collections/:slug) — та же форма
     строки, что и moviesShowcasePage выше (avg_score/rating_count/my_score/
-    my_watched через тот же набор подзапросов), просто JOIN через
+    my_watched/in_my_list через тот же набор подзапросов), просто JOIN через
     collection_movies и сортировка по её position (порядок Кинопоиска/свой
     у source='custom'), а не по movies.*. Фильмы — из НАШЕГО кэша (импорт
     уже развёл коллекцию по movies/movie_detail_queue, см.
@@ -999,13 +1009,14 @@ function collectionMoviesPage(collectionId, limit, offset, userId) {
            (SELECT AVG(score) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS avg_score,
            (SELECT COUNT(*) FROM movie_marks x WHERE x.kinopoisk_id = movies.kinopoisk_id AND x.score IS NOT NULL) AS rating_count,
            (SELECT score FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_score,
-           (SELECT watched FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_watched
+           (SELECT watched FROM movie_marks x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS my_watched,
+           (SELECT 1 FROM personal_list x WHERE x.user_id = ? AND x.kinopoisk_id = movies.kinopoisk_id) AS in_my_list
       FROM collection_movies cm
       JOIN movies ON movies.kinopoisk_id = cm.kinopoisk_id
      WHERE cm.collection_id = ?
      ORDER BY cm.position
      LIMIT ? OFFSET ?
-  `).all(userId, userId, collectionId, limit, offset);
+  `).all(userId, userId, userId, collectionId, limit, offset);
 }
 
 function moviesCountFiltered(genre) {
@@ -1373,6 +1384,12 @@ function markSummary(kinopoiskId, userId) {
     myScore: mine ? mine.score : null,
     avgScore: roundScore(agg.avg_score),
     ratingCount: agg.rating_count,
+    // Для «Убрать из списка» в очереди/истории комнаты (см. renderAddToMenu
+    // в app.js) — тот же personal_list, что и у витрины/подборки, только тут
+    // это не подзапрос в общем SELECT (roomMovies без userId вообще, см.
+    // выше), а отдельный маленький запрос в том же месте, где уже дёргается
+    // markGet/movieAvgScore на каждый фильм комнаты.
+    inMyList: !!(userId && stmt.personalListHas.get(userId, kinopoiskId)),
   };
 }
 
