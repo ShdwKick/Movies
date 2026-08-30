@@ -2101,10 +2101,27 @@ $("accountBtn").onclick = () => {
   openModal("accountModalBackdrop");
 };
 document.addEventListener("keydown", e => {
-  if (e.key !== "Escape") return;
-  closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCardMenu(); closeGlobalSearch();
-  if (openModalId) closeModal(openModalId);
-  if (tourActive()) endTour();
+  if (e.key === "Escape") {
+    closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCardMenu(); closeGlobalSearch();
+    if (openModalId) closeModal(openModalId);
+    if (tourActive()) endTour();
+    return;
+  }
+  // ТВ-пульт: см. openModal выше — .modal сфокусирован программно, но сам
+  // overflow:auto стрелками ТВ-браузер не крутит (нет ни колеса, ни тача,
+  // которые бы это запускали нативно). Крутим сами, пока открыта модалка —
+  // не мешает обычной клавиатуре: там есть мышь/тач, чтобы прокрутить, и
+  // стрелки внутри модалки и так ни на что своё не завязаны.
+  if (!openModalId) return;
+  if (!["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(e.key)) return;
+  const modal = $(openModalId).querySelector(".modal");
+  if (!modal) return;
+  const line = 80, page = modal.clientHeight * 0.9;
+  const delta = { ArrowUp: -line, ArrowDown: line, PageUp: -page, PageDown: page }[e.key];
+  e.preventDefault();
+  if (e.key === "Home") modal.scrollTo({ top: 0 });
+  else if (e.key === "End") modal.scrollTo({ top: modal.scrollHeight });
+  else modal.scrollBy({ top: delta });
 });
 
 $("accountModalPublicProfile").onclick = () => {
@@ -2135,9 +2152,24 @@ $("accountModalTour").onclick = () => {
 let openModalId = null; // id открытого .modal-backdrop — нужен для Escape
 function openModal(backdropId) {
   closeRoomMenu(); closeAccountMenu(); closeCsvMenu(); closeCardMenu();
-  $(backdropId).classList.remove("hidden");
+  const backdrop = $(backdropId);
+  backdrop.classList.remove("hidden");
   document.body.classList.add("modal-open");
   openModalId = backdropId;
+  // Пульт телевизора (без мыши/тача) не крутит колёсико и не тащит пальцем —
+  // .modal{overflow:auto} сам по себе для него бесполезен, пока фокус нигде
+  // не стоит: spatial navigation браузера уводит стрелки на первую попавшуюся
+  // кнопку внутри, а не скроллит контейнер под ней (баг «на ТВ в подробностях
+  // фильма страницу вообще никак не прокрутить» — модалка «Фильм», где
+  // текста обычно больше высоты экрана). Фокусируем сам .modal сразу при
+  // открытии — tabindex ставим тут же, а не в разметке, чтобы не плодить
+  // лишний Tab-стоп при обычной клавиатуре; сами стрелки/PageUp/PageDown
+  // ловит общий keydown ниже (см. там) и скроллит .modal вручную.
+  const modal = backdrop.querySelector(".modal");
+  if (modal) {
+    modal.setAttribute("tabindex", "-1");
+    modal.focus({ preventScroll: true });
+  }
 }
 function closeModal(backdropId) {
   const b = $(backdropId);

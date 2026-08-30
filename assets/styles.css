@@ -806,6 +806,11 @@ input.pager-page-num-input{
   padding:1.1rem 1.3rem 1.3rem;box-shadow:var(--e2);
   scrollbar-width:thin;scrollbar-color:var(--md-sys-color-outline-variant) transparent;
 }
+/* .modal сам получает фокус программно при открытии (см. openModal в
+   app.js — нужно ТВ-пульту, чтобы вообще было что скроллить стрелками) —
+   это не настоящий интерактивный фокус, обычное синее кольцо тут только
+   мешало бы, у самих кнопок/полей внутри свой :focus-visible никуда не делся. */
+.modal:focus{outline:none}
 .modal-head{display:flex;justify-content:space-between;align-items:center;gap:.8rem}
 .modal-head h2{margin:0}
 /* Шире, чем стандартная .modal — только для #addMovieModalBackdrop (карточки
