@@ -238,5 +238,28 @@ module.exports = function createPoiskKino(options = {}) {
       if (next) qs.set("next", next);
       return call(`/v1.5/list/${encodeURIComponent(slug)}?${qs.toString()}`);
     },
+    // Универсальный фильтрованный поиск (GET /v1.4/movie) — НЕ
+    // /v1.4/movie/search (тот только по названию). Нужен, чтобы находить
+    // «нормальные» фильмы (недавние, не безвестные) без угадывания диапазона
+    // kinopoisk_id — тот с годом выхода НЕ коррелирует: у фильмов одного
+    // 2024 года id разбросаны от сотен тысяч до нескольких миллионов, чистого
+    // диапазона на конкретный год попросту не существует (см. задачу
+    // «импорт по параметрам» — проверено вживую перед тем, как это писать).
+    // filters — сырые query-параметры poiskkino.dev как есть (year,
+    // "votes.kp", "rating.kp", "genres.name" и т.д., см. /v1.4/movie в
+    // документации) — не заворачиваем их во что-то своё, server.js сам решает,
+    // что фильтровать, этот слой только прокладывает запрос дальше.
+    filterMovies: ({ page, limit, sortField, sortType, ...filters } = {}) => {
+      const qs = new URLSearchParams();
+      for (const [key, value] of Object.entries(filters)) {
+        if (value != null && value !== "") qs.set(key, String(value));
+      }
+      if (!qs.has("type")) qs.set("type", "movie"); // без этого в выдаче попадаются сериалы/мультсериалы
+      qs.set("page", String(page || 1));
+      qs.set("limit", String(limit || 250));
+      qs.set("sortField", sortField || "votes.kp");
+      qs.set("sortType", sortType || "-1");
+      return call(`/v1.4/movie?${qs.toString()}`);
+    },
   };
 };

@@ -1731,6 +1731,77 @@ async function importKinopoiskCollection(sourceSlug) {
   return { id, slug: sourceSlug, name, coverUrl, moviesCount: imported, skipped, alreadyCached, queued, partial };
 }
 
+// Жёсткий потолок на «сколько фильмов максимум за один запуск» (см.
+// importMoviesByFilter ниже) — админ передаёт свой limit, но без верхней
+// границы неаккуратный фильтр (например, без нижней границы по голосам)
+// мог бы запросить многие тысячи фильмов зараз и разом сжечь суточную квоту
+// на один клик. 5000 — тот же порядок, что и MOVIE_DETAIL_QUEUE_MAX_PER_CALL.
+const IMPORT_BY_FILTER_MAX_COUNT = 5000;
+
+/** Импорт фильмов ПО ПАРАМЕТРАМ (год/рейтинг/голоса и т.д.) — не по slug
+    подборки (importKinopoiskCollection выше) и НЕ по диапазону kinopoisk_id
+    (старый «Скан по kinopoisk_id» в админке). Диапазон id для этого не
+    годится в принципе: id не коррелирует с годом выхода — проверено вживую
+    перед тем, как это писать, у фильмов одного 2024 года id разбросаны от
+    сотен тысяч до нескольких миллионов, чистого диапазона на конкретный год
+    попросту нет. filters — сырые query-параметры poiskkino.dev (year,
+    "votes.kp" и т.п., см. poiskkino.filterMovies) ровно как их прислал
+    админ, тут не разбираем и не проверяем смысл конкретных полей — это
+    работа /v1.4/movie у provider'а.
+    Список фильмов, как и у importKinopoiskCollection, собираем СИНХРОННО
+    постранично (лимит страницы у provider'а — 250, дёшево), сортировка по
+    votes.kp по убыванию — если запрошенный limit меньше, чем всего
+    подходит под фильтр, в него попадут самые известные, а не случайный
+    хвост выдачи. Полные детали каждого — НЕ синхронно, как и у коллекций:
+    ensureMovieShallow сразу, докачку деталей — в movie_detail_queue.
+    Это НЕ коллекция — просто добавка в общий кэш movies (для витрины/
+    рекомендаций), никакой записи в collections/collection_movies тут нет. */
+async function importMoviesByFilter(filters, maxCount) {
+  const limit = Math.max(1, Math.min(maxCount || 250, IMPORT_BY_FILTER_MAX_COUNT));
+  const PAGE_SIZE = 250;
+  const items = [];
+  let page = 1, total = Infinity, partial = false;
+  while (items.length < limit && (page - 1) * PAGE_SIZE < total) {
+    let data;
+    try {
+      data = await poiskkino.filterMovies({ ...filters, page, limit: PAGE_SIZE });
+    } catch (e) {
+      if (items.length === 0) throw e; // нечего сохранять — прежнее поведение
+      partial = true;
+      break;
+    }
+    total = Number.isFinite(data.total) ? data.total : items.length;
+    const docs = Array.isArray(data.docs) ? data.docs : [];
+    if (!docs.length) break;
+    items.push(...docs);
+    page++;
+  }
+  const capped = items.slice(0, limit);
+
+  const ts = now();
+  let imported = 0, alreadyCached = 0, skipped = 0, queued = 0;
+  for (const raw of capped) {
+    let mv;
+    try {
+      mv = mapMovie(raw);
+    } catch (e) {
+      skipped++;
+      adminLog.warn("Импорт по параметрам: пропущен фильм с неожиданными данными", { message: e.message });
+      continue;
+    }
+    imported++;
+    const existingMovie = stmt.movieByKpId.get(mv.kinopoiskId);
+    if (!existingMovie) ensureMovieShallow({ kinopoiskId: mv.kinopoiskId, title: mv.title, year: mv.year, posterUrl: mv.posterUrl });
+    if (existingMovie && existingMovie.detail_cached_at) { alreadyCached++; continue; }
+    stmt.movieDetailQueueInsert.run(mv.kinopoiskId, ts);
+    queued++;
+  }
+  return {
+    totalMatched: total === Infinity ? capped.length : total,
+    moviesCount: imported, skipped, alreadyCached, queued, partial,
+  };
+}
+
 /** IMDb-запись (imdb_id известен, kinopoisk_id — нет) → фильм в movies, в
     таком порядке (без сети, если получится): (1) уже закэширован по этому
     imdb_id (кто-то другой уже привёл его через poiskkino.dev — там imdb_id
@@ -3082,6 +3153,47 @@ const server = http.createServer(async (req, res) => {
       if (result.queued > 0) drainMovieDetailQueue().catch(e => adminLog.error("Очередь деталей: сбой батча", { message: e.message }));
       return json(res, 200, result);
     }
+
+    // Импорт по параметрам (год/рейтинг/голоса), не по диапазону
+    // kinopoisk_id — см. importMoviesByFilter выше про то, почему диапазон
+    // id тут не работает в принципе. Тело — уже привычные глазу поля
+    // (yearFrom/yearTo/votesKpMin/ratingKpMin/genre/limit), тут они
+    // переводятся в сырой синтаксис poiskkino.dev (диапазоны вида "a-b").
+    if (p === "/internal/movies/import-by-filter" && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const body = await readJson(req);
+      const yearFrom = parseInt(body.yearFrom, 10);
+      const yearTo = parseInt(body.yearTo, 10);
+      const votesKpMin = parseInt(body.votesKpMin, 10);
+      const ratingKpMin = parseFloat(body.ratingKpMin);
+      const genre = str(body.genre, 100);
+      const limit = parseInt(body.limit, 10);
+
+      const filters = {};
+      if (Number.isFinite(yearFrom)) {
+        filters.year = `${yearFrom}-${Number.isFinite(yearTo) ? yearTo : new Date().getFullYear() + 1}`;
+      } else if (Number.isFinite(yearTo)) {
+        filters.year = `1874-${yearTo}`;
+      }
+      if (Number.isFinite(votesKpMin)) filters["votes.kp"] = `${votesKpMin}-99999999`;
+      if (Number.isFinite(ratingKpMin)) filters["rating.kp"] = `${ratingKpMin}-10`;
+      if (genre) filters["genres.name"] = genre;
+
+      let result;
+      try {
+        result = await importMoviesByFilter(filters, Number.isFinite(limit) ? limit : 250);
+      } catch (e) {
+        adminLog.error("Импорт по параметрам: упал", { filters, message: e.message, status: e.status || null });
+        return poiskkinoError(res, e);
+      }
+      adminLog[result.partial ? "warn" : "info"](
+        result.partial ? "Импорт по параметрам: остановился раньше срока (не хватило квоты)" : "Импорт по параметрам: готово",
+        { filters, moviesCount: result.moviesCount, totalMatched: result.totalMatched, skipped: result.skipped, queued: result.queued, partial: result.partial }
+      );
+      if (result.queued > 0) drainMovieDetailQueue().catch(e => adminLog.error("Очередь деталей: сбой батча", { message: e.message }));
+      return json(res, 200, { filters, ...result });
+    }
+
     const collectionDeleteMatch = p.match(/^\/internal\/collections\/([\w-]+)$/);
     if (collectionDeleteMatch && req.method === "DELETE") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
