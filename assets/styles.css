@@ -275,9 +275,16 @@ input[type="number"]{
 input[type="number"]:focus{outline:none;border-color:var(--md-sys-color-primary);border-width:1.5px}
 input[type="range"]{flex:1;accent-color:var(--flame-tip);cursor:pointer}
 select{
-  font:inherit;font-size:14px;padding:9px 12px;border-radius:var(--md-sys-shape-corner-s);
+  font:inherit;font-size:14px;padding:9px 34px 9px 12px;border-radius:var(--md-sys-shape-corner-s);
   border:1px solid var(--md-sys-color-outline);background:var(--md-sys-color-surface-container-lowest);
   color:var(--md-sys-color-on-surface);cursor:pointer;color-scheme:light;
+  /* Нативная стрелка браузера то мельче, то крупнее, то криво посажена в
+     зависимости от ОС/движка — appearance:none и рисуем свою (currentColor,
+     подхватывает и цвет текста, и тему light/dark сама, без отдельной
+     переменной под неё). */
+  appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'><path d='M6 9l6 6 6-6' stroke='currentColor' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat:no-repeat;background-position:right 10px center;background-size:16px;
 }
 [data-theme="dark"] select{color-scheme:dark}
 .row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:1rem}
@@ -477,6 +484,11 @@ select{
    раньше. #showcaseFlatControls целиком прячется в виде «По жанрам» —
    сортировка/фильтр общего списка там ни на что не влияют. */
 .showcase-toolbar{display:flex;justify-content:flex-end;align-items:center;gap:.6rem}
+/* Сортировка/фильтр «Что мы смотрели»/«Мой список» (см. watchedControls/
+   myListControls в index.html) — тем же приёмом, что и у showcase-toolbar
+   выше: прижаты к правому краю, а не растянуты от левого вместе с
+   остальным рядом (.row по умолчанию не задаёт justify-content). */
+.watched-controls{justify-content:flex-end}
 #showcaseViewToggle{margin-right:auto}
 .showcase-flat-controls{display:flex;align-items:center;gap:.6rem}
 #cachedGenreChip{border:0;cursor:pointer;font:inherit}

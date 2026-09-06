@@ -748,6 +748,28 @@
 <section id="watchedView" hidden>
   <a class="backlink" href="#/">← Все комнаты</a>
   <h1>Что мы смотрели</h1>
+  <!-- Сортировка/фильтр — целиком на клиенте: список и так весь целиком
+       приходит одним GET /watched (личная история, не тысячи записей, как у
+       витрины «Из базы» — там ради этого гоняют limit/offset на сервер), так
+       что второй раз ходить в сеть ради смены сортировки незачем — см.
+       renderWatchedFiltered в app.js. Спрятана, пока список пуст (нечего
+       сортировать/фильтровать) — то же условие, что и у watchedEmpty. -->
+  <div class="row watched-controls" id="watchedControls" hidden>
+    <select id="watchedSortSelect">
+      <option value="recent">Недавно просмотренные</option>
+      <option value="title_asc">По алфавиту (А→Я)</option>
+      <option value="title_desc">По алфавиту (Я→А)</option>
+      <option value="year_desc">Сначала новые (год)</option>
+      <option value="year_asc">Сначала старые (год)</option>
+      <option value="myscore_desc">Моя оценка (высокая→низкая)</option>
+      <option value="myscore_asc">Моя оценка (низкая→высокая)</option>
+      <option value="rating_desc">Средняя оценка (высокая→низкая)</option>
+      <option value="rating_asc">Средняя оценка (низкая→высокая)</option>
+    </select>
+    <select id="watchedGenreSelect">
+      <option value="">Все жанры</option>
+    </select>
+  </div>
   <p class="muted" id="watchedEmpty">Пока ничего не отмечено просмотренным.</p>
   <div class="movie-grid" id="watchedList"></div>
 </section>
@@ -776,6 +798,23 @@
   <h1>Мой список</h1>
   <div class="row draw-start-row" id="myListDrawRow" hidden>
     <button class="draw-start-btn" id="myListDrawBtn">Выбрать случайный</button>
+  </div>
+  <!-- Тот же приём, что у watched-controls выше — сортировка/фильтр
+       на клиенте, список и так весь загружен разом. Без «моей оценки» —
+       фильмы тут по определению ещё не посмотрены, оценивать нечего. -->
+  <div class="row watched-controls" id="myListControls" hidden>
+    <select id="myListSortSelect">
+      <option value="recent">Недавно добавленные</option>
+      <option value="title_asc">По алфавиту (А→Я)</option>
+      <option value="title_desc">По алфавиту (Я→А)</option>
+      <option value="year_desc">Сначала новые (год)</option>
+      <option value="year_asc">Сначала старые (год)</option>
+      <option value="rating_desc">Средняя оценка (высокая→низкая)</option>
+      <option value="rating_asc">Средняя оценка (низкая→высокая)</option>
+    </select>
+    <select id="myListGenreSelect">
+      <option value="">Все жанры</option>
+    </select>
   </div>
   <p class="muted" id="myListEmpty">Список пуст — добавляйте фильмы через поиск в шапке.</p>
   <div class="movie-grid" id="myListItems"></div>

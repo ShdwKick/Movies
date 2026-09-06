@@ -3282,15 +3282,67 @@ async function showProfile() {
 }
 $("profileMyListDrawBtn").onclick = () => { location.hash = "#/my-list/draw"; };
 
+/** Сортировка+фильтр списков «Что мы смотрели»/«Мой список» — целиком на
+    клиенте: оба списка и так приходят одним GET разом (личная история, не
+    тысячи записей, как у витрины «Из базы», где ради этого гоняют
+    limit/offset на сервер), второй раз ходить в сеть ради смены сортировки
+    незачем. getAvgScore/getMyScore читают показатель из СВОЕЙ формы ответа
+    (watched — верхний уровень it.avgScore/it.myScore, мой список —
+    it.movie.avgScore, своей оценки у ещё не просмотренного фильма нет,
+    getMyScore тогда null — myscore_* сортировки такому списку и не
+    предлагаются, см. HTML). "recent" — ключ по умолчанию, ни на что не
+    матчится в cmp ниже, список просто остаётся в порядке, каком его отдал
+    сервер (ORDER BY watched_at/added_at DESC — то же самое «недавние
+    сверху»), пересортировывать незачем. */
+function sortAndFilterMovies(items, sortKey, genre, getAvgScore, getMyScore) {
+  const list = genre ? items.filter(it => (it.movie.genres || []).includes(genre)) : items.slice();
+  const cmp = {
+    title_asc: (a, b) => a.movie.title.localeCompare(b.movie.title, "ru"),
+    title_desc: (a, b) => b.movie.title.localeCompare(a.movie.title, "ru"),
+    year_desc: (a, b) => (b.movie.year || 0) - (a.movie.year || 0),
+    year_asc: (a, b) => (a.movie.year || 0) - (b.movie.year || 0),
+    rating_desc: (a, b) => (getAvgScore(b) ?? -1) - (getAvgScore(a) ?? -1),
+    rating_asc: (a, b) => (getAvgScore(a) ?? -1) - (getAvgScore(b) ?? -1),
+    myscore_desc: getMyScore ? (a, b) => (getMyScore(b) ?? -1) - (getMyScore(a) ?? -1) : null,
+    myscore_asc: getMyScore ? (a, b) => (getMyScore(a) ?? -1) - (getMyScore(b) ?? -1) : null,
+  }[sortKey];
+  if (cmp) list.sort(cmp);
+  return list;
+}
+
+/** <option> фильтра жанров — только те, что реально встречаются в items,
+    по алфавиту, «Все жанры» первым. Пересобирается при каждой загрузке
+    списка (showWatched/showMyList) — набор жанров меняется вместе со
+    списком. Сохраняет текущий выбор, если он всё ещё встречается. */
+function populateGenreOptions(selectEl, items) {
+  const current = selectEl.value;
+  const genres = [...new Set(items.flatMap(it => it.movie.genres || []))].sort((a, b) => a.localeCompare(b, "ru"));
+  selectEl.innerHTML = `<option value="">Все жанры</option>` + genres.map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join("");
+  if (genres.includes(current)) selectEl.value = current;
+}
+
 // ───────────────────────── что мы смотрели ─────────────────────────
+let watchedRaw = [];
 async function showWatched() {
   showOnly("watchedView");
   document.title = "Что смотрим? — что мы смотрели";
   const data = await act(() => api("/watched"));
   if (!data) return;
-  $("watchedEmpty").hidden = data.movies.length > 0;
-  renderWatchedInto($("watchedList"), data.movies, showWatched);
+  watchedRaw = data.movies;
+  $("watchedEmpty").hidden = watchedRaw.length > 0;
+  $("watchedControls").hidden = watchedRaw.length === 0;
+  populateGenreOptions($("watchedGenreSelect"), watchedRaw);
+  renderWatchedFiltered();
 }
+function renderWatchedFiltered() {
+  const list = sortAndFilterMovies(
+    watchedRaw, $("watchedSortSelect").value, $("watchedGenreSelect").value,
+    it => it.avgScore, it => it.myScore
+  );
+  renderWatchedInto($("watchedList"), list, showWatched);
+}
+$("watchedSortSelect").onchange = renderWatchedFiltered;
+$("watchedGenreSelect").onchange = renderWatchedFiltered;
 
 // Тонкая обёртка вокруг renderMovieTile — своё тут только меню («Добавить в
 // комнату», подгружает список комнат лениво при открытии; «Убрать из
@@ -3339,17 +3391,32 @@ function renderWatchedInto(container, items, onChange) {
 // глобального поиска в шапке или на главной, см. renderSearchResultRow);
 // открыть на Кинопоиске, убрать из списка или закинуть в конкретную комнату
 // — всё через саму карточку (renderMyListInto).
+let myListRaw = [];
 async function showMyList() {
   showOnly("myListView");
   document.title = "Что смотрим? — мой список";
   const data = await act(() => api("/my-list"));
   if (!data) return;
-  $("myListEmpty").hidden = data.movies.length > 0;
-  renderMyListInto($("myListItems"), data.movies, showMyList);
+  myListRaw = data.movies;
+  $("myListEmpty").hidden = myListRaw.length > 0;
+  $("myListControls").hidden = myListRaw.length === 0;
+  populateGenreOptions($("myListGenreSelect"), myListRaw);
+  renderMyListFiltered();
   // Тот же порог, что и у «Крутить» в комнате (renderMovies) — розыгрыш
   // одного фильма ничего не решает, хоть сервер такое и не запрещает.
-  $("myListDrawRow").hidden = data.movies.length < 2;
+  // Считаем от ПОЛНОГО списка, не отфильтрованного — фильтр тут просто
+  // способ посмотреть, крутить жребий по подмножеству никто не просил.
+  $("myListDrawRow").hidden = myListRaw.length < 2;
 }
+function renderMyListFiltered() {
+  const list = sortAndFilterMovies(
+    myListRaw, $("myListSortSelect").value, $("myListGenreSelect").value,
+    it => it.movie.avgScore, null
+  );
+  renderMyListInto($("myListItems"), list, showMyList);
+}
+$("myListSortSelect").onchange = renderMyListFiltered;
+$("myListGenreSelect").onchange = renderMyListFiltered;
 $("myListDrawBtn").onclick = () => { location.hash = "#/my-list/draw"; };
 
 /** onChange зовётся после «Убрать из списка» — на полной странице #/my-list
