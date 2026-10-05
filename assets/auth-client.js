@@ -14,6 +14,8 @@
  *   const res = await auth.fetch("/api/state");  // сам подставит токен и обновит его при 401
  */
 
+const OFFLINE = Symbol("offline"); // tryRefresh(): до auth не достучались — вход не потерян
+
 function createAuthClient(options) {
   const authBase = String(options.authBase || "").replace(/\/+$/, "");
   const clientId = options.clientId;
@@ -122,17 +124,25 @@ function createAuthClient(options) {
 
   let refreshing = null; // одна попытка на всех: параллельные запросы не должны гонять refresh наперегонки
 
-  async function refresh() {
+  /** true — обновили; false — refresh-токена нет или auth его отверг (нужен
+   * вход); OFFLINE — до auth не достучались (нет сети, auth лежит). Без сети
+   * токены НЕ стираем: иначе поезд в тоннеле выглядит как разлогин, а
+   * ответы, данные в это время, уходят «гостю». */
+  async function tryRefresh() {
     if (refreshing) return refreshing;
     const token = localStorage.getItem(K.refresh);
     if (!token) return false;
 
     refreshing = (async () => {
-      const res = await fetch(authBase + "/oauth/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ grant_type: "refresh_token", client_id: clientId, refresh_token: token }),
-      });
+      let res;
+      try {
+        res = await fetch(authBase + "/oauth/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ grant_type: "refresh_token", client_id: clientId, refresh_token: token }),
+        });
+      } catch { return OFFLINE; }
+      if (res.status >= 500) return OFFLINE;
       if (!res.ok) { clearTokens(); return false; }
       saveTokens(await res.json());
       return true;
@@ -140,13 +150,22 @@ function createAuthClient(options) {
 
     return refreshing;
   }
+  const refresh = async () => (await tryRefresh()) === true;
 
-  /** Действующий access-токен: обновляет заранее, если срок вышел. */
-  async function getAccessToken() {
+  /** Действующий токен, null — нужен вход, OFFLINE — нет связи с auth. */
+  async function currentToken() {
     const access = localStorage.getItem(K.access);
     const expires = parseInt(localStorage.getItem(K.expires) || "0", 10);
     if (access && Date.now() < expires) return access;
-    return (await refresh()) ? localStorage.getItem(K.access) : null;
+    const r = await tryRefresh();
+    return r === true ? localStorage.getItem(K.access) : r;
+  }
+
+  /** Действующий access-токен: обновляет заранее, если срок вышел. null —
+   * токена сейчас нет (в том числе без сети — тогда токены целы, повторите позже). */
+  async function getAccessToken() {
+    const t = await currentToken();
+    return typeof t === "string" ? t : null;
   }
 
   /**
@@ -160,13 +179,16 @@ function createAuthClient(options) {
       return fetch(url, { ...init, headers });
     };
 
-    let token = await getAccessToken();
+    let token = await currentToken();
+    if (token === OFFLINE) throw new AuthOfflineError();
     if (!token) throw new AuthRequiredError();
 
     let res = await send(token);
     if (res.status !== 401) return res;
 
-    if (!(await refresh())) throw new AuthRequiredError();
+    const r = await tryRefresh();
+    if (r === OFFLINE) throw new AuthOfflineError();
+    if (!r) throw new AuthRequiredError();
     token = localStorage.getItem(K.access);
     if (!token) throw new AuthRequiredError();
     res = await send(token);
@@ -207,5 +229,10 @@ function createAuthClient(options) {
 class AuthRequiredError extends Error {
   constructor() { super("auth required"); this.name = "AuthRequiredError"; }
 }
+/** Бросается, когда токен надо обновить, а до auth не достучаться (нет сети).
+ * Вход при этом не потерян — как обычная сетевая ошибка: повторите позже. */
+class AuthOfflineError extends Error {
+  constructor() { super("auth unreachable"); this.name = "AuthOfflineError"; }
+}
 
-if (typeof module !== "undefined") module.exports = { createAuthClient, AuthRequiredError };
+if (typeof module !== "undefined") module.exports = { createAuthClient, AuthRequiredError, AuthOfflineError };
