@@ -2204,6 +2204,7 @@ const MIME = {
   ".js": "application/javascript; charset=utf-8", ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
   ".ico": "image/x-icon", ".woff2": "font/woff2",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
 };
 
 /** Отдаём только index.html и assets/. store.db и server.js снаружи недоступны. */

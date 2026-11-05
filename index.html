@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#120a0e">
+<!-- Манифест — чтобы «Установить» в Chrome ставило полноценное приложение
+     (display:standalone, без адресной строки), а не обычный ярлык-окно:
+     у страницы без манифеста Chrome рисует поверх окна браузерную панель
+     с адресом. Сама панель всё равно появится на странице входа — она на
+     другом домене (auth), вне scope приложения, это нормально. -->
+<link rel="manifest" href="assets/manifest.webmanifest">
 <title>Что смотрим? — BurningHouse</title>
 <meta name="robots" content="noindex, nofollow">
 <!-- Без description поисковики (замечено на Яндексе) сами выдёргивают
